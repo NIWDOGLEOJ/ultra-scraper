@@ -38,7 +38,8 @@ On **Linux** the browser step is `npm run setup:browser:linux` instead — it al
 
 - Business name and Google Maps listing link
 - Category, address and public phone number shown in Maps
-- Website link shown in Maps
+- Website link shown in Maps — or, with `--web-search-fallback`, one found by web search
+- Which of those two the website came from (`website_source`: `maps` or `search`)
 - Public email addresses found on the business website
 - Contact-page URLs where emails were found
 - Per-business status and concise error information
@@ -290,6 +291,59 @@ npm run scrape -- "colleges in Chennai" --limit 20 --headed
 
 Press `Ctrl-C` at any time to stop; the browser is closed cleanly.
 
+## Your first run, explained
+
+```sh
+npm run scrape -- "dental clinics in Coimbatore" --limit 4
+```
+
+While it runs it tells you which phase it is in:
+
+```
+Starting browser…
+Collecting Google Maps listings…
+Read listing 4 of 4…
+Scanning 4 websites (4 at a time)…
+Scanned 4 of 4 websites…
+Creating CSV and Excel files…
+Finished. 4 of 4 listings matched your filter.
+
+Exported 4 businesses (4 public emails) to:
+  output/maps-emails-2026-08-25T20-32-25-718Z.csv
+  output/maps-emails-2026-08-25T20-32-25-718Z.xlsx
+```
+
+Open the `.xlsx` in Excel, Numbers or LibreOffice. One row per business:
+
+| business_name | category | phone | website | emails | status |
+| --- | --- | --- | --- | --- | --- |
+| Dr. Ruchi's | Dental clinic | 09025227544 | drruchidental.com | drrporwal@gmail.com | success |
+| MARUTHI DENTAL | Dental clinic | 09043723203 | maruthidental.com | drarun@maruthidental.com | success |
+| Arasu Dental Care | Orthodontist | 08838022157 | arasudentalcare.com | arasudentalcare@gmail.com | success |
+
+Read it like this:
+
+- **`status` first.** `success` means an email was found. Anything else tells you *why* not — see
+  [the status table](#the-status-column). A `no_website` or `no_email_found` row is not a bug;
+  it means that business published nothing to find.
+- **A row can be useful without an email.** The phone number comes from Maps, so it is there even
+  when the website failed. That is what the `contacts-` file is for.
+- **Check `website_source`** if you used `--web-search-fallback`. Rows marked `search` were matched
+  by name, not confirmed by the business.
+- **`error_message`** is plain English and worth reading on any failed row.
+
+## Common recipes
+
+| You want | Command |
+| --- | --- |
+| A quick look at a new category | `npm run scrape -- "cafes in Madurai" --limit 10 --headed` |
+| Only businesses with an email | `npm run scrape -- "dentists in Chennai" --limit 30 --contact emails` |
+| Just one main address each | `npm run scrape -- "dentists in Chennai" --limit 30 --max-emails 1` |
+| A large job, as fast as possible | `npm run scrape -- "colleges in Chennai" --limit 100 --timeout 10000` |
+| Gentle, if sites start blocking you | `npm run scrape -- "hotels in Chennai" --limit 40 --concurrency 3 --delay 2500` |
+| Save somewhere other than `output/` | `npm run scrape -- "gyms in Chennai" --limit 20 --output exports` |
+| Also chase businesses with no website | `npm run scrape -- "salons in Chennai" --limit 30 --web-search-fallback` |
+
 ## Contact filters
 
 ```sh
@@ -315,6 +369,8 @@ npm run scrape -- "dentists in Chennai" --limit 20 --contact both
 | `--timeout <milliseconds>` | Page loading limit. Default: `15000`. |
 | `--max-emails <number>` | Most emails kept per business. Default: `25`. |
 | `--concurrency <number>` | Websites scanned at the same time, 1-16. Default: automatic (4-10, based on `--limit`). |
+| `--no-deep` | Skips the second search on sites that show no email on their obvious pages. |
+| `--web-search-fallback` | Off by default. For businesses with **no** website in Maps, tries to find one by web search. |
 | `--headed` | Shows the automated browser window. |
 | `--help` | Lists every option. |
 
@@ -340,8 +396,64 @@ Raise `--concurrency` to go faster on a fast connection, or lower it to be gentl
 being read. Past roughly 10 the run is limited by its single slowest website rather than by
 parallelism, so higher numbers buy little.
 
+The deeper second search only runs for businesses that yielded nothing on the first pass, so it
+costs almost nothing on a typical run. `--no-deep` turns it off.
+
 Every run also skips downloading images, video and webfonts, which are never a source of contact
 details and are most of the page weight — on Google Maps in particular, that is the map tiles.
+
+## Finding businesses that list no website
+
+Some Maps listings have no website at all — about 1 in 10 in the runs I have measured. Those rows
+are exported as `no_website` and nothing more is done with them.
+
+Turning on the fallback makes the scraper look one up:
+
+```sh
+npm run scrape -- "dentists in Coimbatore" --limit 30 --web-search-fallback
+```
+
+For each of those businesses only, it searches the web for `"<business name>" <address>`, then:
+
+1. Skips results on directory, aggregator and social hosts — Justdial, Yelp, Facebook, LinkedIn,
+   Tripadvisor and the like. The list lives in one constant in `src/web-search.ts`, easy to extend.
+2. Checks the first remaining result against the business name, comparing the distinctive words
+   against the result's title and domain.
+3. **If that check fails, the row stays `no_website`.** It does not try the next result and it
+   never invents an address — a weak match is treated as no match.
+
+A website found this way then goes through exactly the same email scan as any Maps-supplied one,
+and the row is marked `website_source: search` so you can tell the two apart.
+
+A website found this way is scanned at the same concurrency as any other, capped at 3 parallel
+lookups so the search engine is not hammered, with the same `--delay` between them.
+
+This is off by default because it sends queries to a search engine as well as to the business
+sites, and because a name match is a guess about identity in a way a Maps listing is not.
+
+### It needs a search API key to be useful
+
+Free search engines block automated queries. Measured from this scraper's own headless browser:
+DuckDuckGo answers **HTTP 403**, and Bing answers 200 but returns degraded results — the same
+top three for completely different queries, and nothing relevant to the business being looked up.
+
+The name check rejects all of that, so the fallback is *safe* without a key: rows simply stay
+`no_website`, exactly as they do today. It is just not *useful* without one.
+
+To make it work, get a Brave Search API key (there is a free tier) and set it before running:
+
+```sh
+export BRAVE_SEARCH_API_KEY="your-key-here"
+```
+
+On Windows PowerShell:
+
+```sh
+$env:BRAVE_SEARCH_API_KEY="your-key-here"
+```
+
+With the key set, lookups go to the API instead of a scraped results page. Without it, the
+scraper falls back to reading a Bing results page, which currently finds nothing usable.
 
 ## Which emails are kept
 
@@ -363,7 +475,12 @@ Each run writes timestamped CSV and Excel (`.xlsx`) files. All four files from o
 | `no-contact-` | Businesses where no public email or phone number was found. |
 | `failures-` | Listings or websites that timed out, were blocked, or produced an error — and yielded no contact details. |
 
-Every export contains: `business_name`, `maps_url`, `category`, `address`, `phone`, `website`, `emails`, `contact_pages`, `status`, and `error_message`.
+Every export contains: `business_name`, `maps_url`, `category`, `address`, `phone`, `website`,
+`website_source`, `emails`, `contact_pages`, `status`, and `error_message`.
+
+`website_source` is `maps` for a website Google Maps listed, and `search` for one found by
+`--web-search-fallback`. Rows marked `search` are worth a glance before you use them — the match
+was made by name, not confirmed by the business.
 
 CSV files are written as UTF-8 with a byte-order mark and CRLF line endings, so Excel on Windows opens non-English business names correctly instead of showing mojibake.
 
@@ -385,9 +502,17 @@ A row can carry a phone number even when its status is a failure: the phone come
 
 1. Opens a Google Maps search for your category and location, pinned to the English interface so the results are read the same way on every machine.
 2. Collects up to the requested number of public listings.
-3. Reads each business website listed in Maps, several at a time, each in its own isolated browser session.
-4. Scans the homepage and up to three same-site contact/about/support pages.
-5. Extracts public emails and exports the results.
+3. With `--web-search-fallback`, looks up a website for any listing that had none, and keeps it only
+   if the business name genuinely matches (see [that section](#finding-businesses-that-list-no-website)).
+4. Reads each business website, several at a time, each in its own isolated browser session.
+5. Scans the homepage and up to three same-site contact/about/support pages.
+6. If nothing was found there, searches up to six more — admissions, departments, campus and
+   careers pages, plus common contact URLs that some sites only link from JavaScript menus.
+7. Extracts public emails and exports the results.
+
+On every page it reads the visible text, `mailto:` links, and structured data (`application/ld+json`
+and `itemprop="email"`), and it understands addresses written for humans rather than parsers, such
+as `info [at] college [dot] edu`. It does not guess addresses.
 
 Temporary network problems get one retry after a short pause; permanent ones such as an unknown
 domain are not retried. A failed business does not stop the rest of the run, and a contact page
@@ -413,10 +538,12 @@ The source is small, plain TypeScript modules with no framework. Each file does 
 | `src/phone.ts` | Reads the public phone number out of Maps' locale-independent markup. |
 | `src/contact-links.ts` | Ranks a page's links to pick the best few contact/about pages to follow. |
 | `src/domain.ts` | Reduces a hostname to the registrable domain, so `www.` and subdomains still match. |
+| `src/web-search.ts` | The opt-in web-search fallback: the directory block list, the name-match check, and result parsing. |
 | `src/exporter.ts` | Writes the CSV and `.xlsx` files and splits records into the outcome groups. |
 | `src/concurrency.ts` | Bounded parallel map, with and without a per-slot reusable resource. |
 | `src/retry.ts` | Retries transient network failures once; never retries permanent ones. |
 | `src/errors.ts` | Trims Playwright's multi-line error dumps down to one readable cell. |
+| `src/types.ts` | The shared `ScrapeOptions` and `BusinessRecord` shapes every module agrees on. |
 | `src/app.ts`, `src/web/` | The optional local web interface (see below). |
 | `tests/` | Vitest suites, one per module. |
 | `docs/` | Design specs and implementation plans written before the code. |
@@ -454,7 +581,7 @@ It listens on `http://127.0.0.1:3000`, on the loopback address only. Set the `PO
 
 ## Development
 
-Run the test suite (45 tests across 10 files, no network access required):
+Run the test suite (72 tests across 11 files, no network access required):
 
 ```sh
 npm test
