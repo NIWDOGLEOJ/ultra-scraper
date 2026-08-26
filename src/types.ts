@@ -7,6 +7,8 @@ export interface ScrapeOptions {
   timeoutMs: number;
   maxEmails: number;
   concurrency: number;
+  deep: boolean;
+  webSearchFallback: boolean;
   contactFilter: 'both' | 'emails' | 'phones';
 }
 
@@ -17,6 +19,7 @@ export interface BusinessRecord {
   address: string;
   phone: string;
   website: string;
+  websiteSource: 'maps' | 'search';
   emails: string[];
   contactPages: string[];
   status: string;

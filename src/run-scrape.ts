@@ -3,9 +3,10 @@ import { collectMapsBusinesses } from './maps-collector.js';
 import { DESKTOP_USER_AGENT, blockHeavyResources, scanWebsite } from './website-scanner.js';
 import { exportRecords, splitRecordsByOutcome } from './exporter.js';
 import { mapWithConcurrency } from './concurrency.js';
+import { findWebsiteBySearch } from './web-search.js';
 import type { BusinessRecord, ScrapeOptions } from './types.js';
 
-export type ProgressEvent = { stage: 'starting' | 'collecting_maps' | 'scanning_websites' | 'exporting' | 'complete' | 'failed'; message: string; processed: number; total: number; emailsFound: number };
+export type ProgressEvent = { stage: 'starting' | 'collecting_maps' | 'searching_websites' | 'scanning_websites' | 'exporting' | 'complete' | 'failed'; message: string; processed: number; total: number; emailsFound: number };
 export type RunSummary = { businessesProcessed: number; emailsFound: number; listingsCollected: number; csvPath: string; xlsxPath: string };
 export type ContactFilter = 'both' | 'emails' | 'phones';
 
@@ -13,6 +14,9 @@ export const createRunSummary = (records: Array<Pick<BusinessRecord, 'emails'>>,
 export const filterRecords = <T extends Pick<BusinessRecord, 'emails' | 'phone'>>(records: T[], filter: ContactFilter) => filter === 'emails' ? records.filter((record) => record.emails.length > 0) : filter === 'phones' ? records.filter((record) => Boolean(record.phone.trim())) : records;
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** One search engine serving every lookup deserves a lighter touch than a spread of business sites. */
+export const MAX_SEARCH_CONCURRENCY = 3;
 
 /**
  * Chromium's setuid sandbox cannot start as root (Docker, CI, some WSL setups), so it is disabled
@@ -45,10 +49,32 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
     const records = await collectMapsBusinesses(mapsContext, options, (done, total) => emit('collecting_maps', `Read listing ${done} of ${total}…`, done, total));
     await mapsContext.close().catch(() => {});
 
+    for (const record of records) if (record.status !== 'maps_error' && !record.website) record.status = 'no_website';
+
+    if (options.webSearchFallback) {
+      const missing = records.filter((record) => record.status === 'no_website');
+      if (missing.length > 0) {
+        let searched = 0;
+        emit('searching_websites', `Looking up ${missing.length} businesses with no website in Maps…`, 0, missing.length, 0);
+        await mapWithConcurrency(missing, Math.min(options.concurrency, MAX_SEARCH_CONCURRENCY), async (record) => {
+          const { website, error } = await findWebsiteBySearch(browser, record.businessName, record.address, options);
+          if (website) {
+            record.website = website;
+            record.websiteSource = 'search';
+            record.status = 'pending';          // rejoins the normal scanning pipeline
+          } else if (error) {
+            record.errorMessage = error;
+          }
+          searched += 1;
+          emit('searching_websites', `Looked up ${searched} of ${missing.length}…`, searched, missing.length, 0);
+          await pause(options.delayMs);
+        });
+      }
+    }
+
     let emailsFound = 0;
     let scanned = 0;
     const scannable = records.filter((record) => record.status !== 'maps_error' && record.website);
-    for (const record of records) if (record.status !== 'maps_error' && !record.website) record.status = 'no_website';
 
     emit('scanning_websites', `Scanning ${scannable.length} websites (${options.concurrency} at a time)…`, 0, scannable.length, 0);
     await mapWithConcurrency(scannable, options.concurrency, async (record) => {

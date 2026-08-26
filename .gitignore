@@ -8,3 +8,6 @@ dist/
 *.log
 .DS_Store
 .env
+
+# Claude Code worktrees and local state
+.claude/
