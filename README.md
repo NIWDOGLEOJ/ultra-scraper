@@ -332,6 +332,38 @@ Read it like this:
   by name, not confirmed by the business.
 - **`error_message`** is plain English and worth reading on any failed row.
 
+## Stopping and resuming a long run
+
+Long runs save their progress as they go, so a crash or `Ctrl-C` does not send you back to the
+start. Progress is written to `<output>/.checkpoints/` after the listings are collected and
+periodically while websites are being scanned.
+
+Press `Ctrl-C` and the scraper tells you how to pick up where it left off:
+
+```
+Stopped. Progress saved — continue with:
+  npm run scrape -- "engineering colleges in Chennai" --limit 30 --resume
+```
+
+Running that command skips the Google Maps pass entirely and scans only the businesses that were
+never reached:
+
+```
+Resuming: 10 of 25 listings already done.
+Scanning 15 websites (8 at a time)…
+```
+
+Details worth knowing:
+
+- A saved run is identified by its **query and `--limit` together**. Change either one and you get
+  a fresh run, because the set of listings would be different.
+- `--resume` with nothing saved is not an error. It says so and runs normally.
+- The saved file is **deleted once the exports are written**, so a completed run leaves nothing behind.
+- Stopping mid-scan can still lose the last couple of websites that were in flight when you pressed
+  `Ctrl-C`. They are simply rescanned on resume.
+- Checkpoints hold the same business data as the exports, so treat them as personal data too. They
+  live under your output folder, which `.gitignore` already excludes.
+
 ## Common recipes
 
 | You want | Command |
@@ -342,6 +374,7 @@ Read it like this:
 | A large job, as fast as possible | `npm run scrape -- "colleges in Chennai" --limit 100 --timeout 10000` |
 | Gentle, if sites start blocking you | `npm run scrape -- "hotels in Chennai" --limit 40 --concurrency 3 --delay 2500` |
 | Save somewhere other than `output/` | `npm run scrape -- "gyms in Chennai" --limit 20 --output exports` |
+| Continue a run you stopped | `npm run scrape -- "colleges in Chennai" --limit 100 --resume` |
 | Also chase businesses with no website | `npm run scrape -- "salons in Chennai" --limit 30 --web-search-fallback` |
 
 ## Contact filters
@@ -371,6 +404,7 @@ npm run scrape -- "dentists in Chennai" --limit 20 --contact both
 | `--concurrency <number>` | Websites scanned at the same time, 1-16. Default: automatic (4-10, based on `--limit`). |
 | `--no-deep` | Skips the second search on sites that show no email on their obvious pages. |
 | `--web-search-fallback` | Off by default. For businesses with **no** website in Maps, tries to find one by web search. |
+| `--resume` | Continues the last interrupted run of the same query and limit instead of starting over. |
 | `--headed` | Shows the automated browser window. |
 | `--help` | Lists every option. |
 
@@ -539,6 +573,7 @@ The source is small, plain TypeScript modules with no framework. Each file does 
 | `src/contact-links.ts` | Ranks a page's links to pick the best few contact/about pages to follow. |
 | `src/domain.ts` | Reduces a hostname to the registrable domain, so `www.` and subdomains still match. |
 | `src/web-search.ts` | The opt-in web-search fallback: the directory block list, the name-match check, and result parsing. |
+| `src/checkpoint.ts` | Saves and restores run progress so `--resume` can continue an interrupted scrape. |
 | `src/exporter.ts` | Writes the CSV and `.xlsx` files and splits records into the outcome groups. |
 | `src/concurrency.ts` | Bounded parallel map, with and without a per-slot reusable resource. |
 | `src/retry.ts` | Retries transient network failures once; never retries permanent ones. |
@@ -581,7 +616,7 @@ It listens on `http://127.0.0.1:3000`, on the loopback address only. Set the `PO
 
 ## Development
 
-Run the test suite (72 tests across 11 files, no network access required):
+Run the test suite (84 tests across 12 files, no network access required):
 
 ```sh
 npm test

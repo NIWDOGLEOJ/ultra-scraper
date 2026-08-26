@@ -14,6 +14,7 @@ describe('parseOptions', () => {
       concurrency: 5,
       deep: true,
       webSearchFallback: false,
+      resume: false,
       contactFilter: 'both',
     });
   });
@@ -30,6 +31,7 @@ describe('parseOptions', () => {
       concurrency: 8,
       deep: true,
       webSearchFallback: false,
+      resume: false,
       contactFilter: 'emails',
     });
   });
@@ -47,6 +49,11 @@ describe('parseOptions', () => {
   it('keeps the web-search fallback off unless it is asked for', () => {
     expect(parseOptions(['cafes']).webSearchFallback).toBe(false);
     expect(parseOptions(['cafes', '--web-search-fallback']).webSearchFallback).toBe(true);
+  });
+
+  it('keeps resume off unless it is asked for', () => {
+    expect(parseOptions(['cafes']).resume).toBe(false);
+    expect(parseOptions(['cafes', '--resume']).resume).toBe(true);
   });
 
   it('points the user at --help instead of printing a raw commander error twice', () => {

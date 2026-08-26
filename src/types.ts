@@ -9,6 +9,7 @@ export interface ScrapeOptions {
   concurrency: number;
   deep: boolean;
   webSearchFallback: boolean;
+  resume: boolean;
   contactFilter: 'both' | 'emails' | 'phones';
 }
 

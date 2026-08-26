@@ -42,6 +42,7 @@ export function parseOptions(argv: string[]): ScrapeOptions {
     .option('--concurrency <number>', 'websites scanned in parallel, 1-16 (default: automatic, 4-10 based on --limit)')
     .option('--no-deep', 'skip the extra search on sites that show no email on their obvious pages')
     .option('--web-search-fallback', 'for businesses with no website in Maps, look one up with a web search')
+    .option('--resume', 'continue the last interrupted run of this same query and limit')
     .option('--contact <type>', 'export businesses with both, emails, or phones', 'both')
     // commander writes its own error text before we ever see the exception, which would print
     // every usage error twice. Help and version still go to stdout normally.
@@ -73,6 +74,7 @@ export function parseOptions(argv: string[]): ScrapeOptions {
     concurrency: options.concurrency === undefined ? autoConcurrency(limit) : boundedInteger(String(options.concurrency), 'concurrency', 16),
     deep: options.deep !== false,
     webSearchFallback: Boolean(options.webSearchFallback),
+    resume: Boolean(options.resume),
     contactFilter: contactFilter as ScrapeOptions['contactFilter'],
   };
 }
