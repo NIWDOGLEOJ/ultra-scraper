@@ -17,12 +17,14 @@ describe('parseOptions', () => {
       resume: false,
       skipSeen: false,
       formats: ['csv', 'xlsx'],
+      maxDelayMs: 30_000,
+      proxies: [],
       contactFilter: 'both',
     });
   });
 
   it('parses supported options', () => {
-    expect(parseOptions(['bakeries in Madurai', '--limit', '5', '--output', 'exports', '--headed', '--delay', '500', '--timeout', '8000', '--max-emails', '10', '--concurrency', '8', '--format', 'json,jsonl', '--contact', 'emails'])).toEqual({
+    expect(parseOptions(['bakeries in Madurai', '--limit', '5', '--output', 'exports', '--headed', '--delay', '500', '--timeout', '8000', '--max-emails', '10', '--concurrency', '8', '--format', 'json,jsonl', '--max-delay', '9000', '--proxy', 'http://u:p@10.0.0.1:8080,10.0.0.2:3128', '--contact', 'emails'])).toEqual({
       query: 'bakeries in Madurai',
       limit: 5,
       outputDir: 'exports',
@@ -36,6 +38,8 @@ describe('parseOptions', () => {
       resume: false,
       skipSeen: false,
       formats: ['json', 'jsonl'],
+      maxDelayMs: 9000,
+      proxies: [{ server: 'http://10.0.0.1:8080', username: 'u', password: 'p' }, { server: 'http://10.0.0.2:3128' }],
       contactFilter: 'emails',
     });
   });
@@ -50,6 +54,8 @@ describe('parseOptions', () => {
     expect(() => parseOptions(['cafes', '--concurrency', '99'])).toThrow('16 or less');
     expect(() => parseOptions(['cafes', '--format', 'pdf'])).toThrow('Not recognised: pdf');
     expect(() => parseOptions(['cafes', '--format', ' '])).toThrow('at least one');
+    expect(() => parseOptions(['cafes', '--max-delay', '-1'])).toThrow('max-delay');
+    expect(() => parseOptions(['cafes', '--proxy', 'ftp://nope'])).toThrow('http, https or socks5');
   });
 
   it('keeps the web-search fallback off unless it is asked for', () => {
@@ -60,6 +66,11 @@ describe('parseOptions', () => {
   it('keeps resume off unless it is asked for', () => {
     expect(parseOptions(['cafes']).resume).toBe(false);
     expect(parseOptions(['cafes', '--resume']).resume).toBe(true);
+  });
+
+  it('uses no proxy unless one is named', () => {
+    expect(parseOptions(['cafes']).proxies).toEqual([]);
+    expect(parseOptions(['cafes', '--proxy', '10.0.0.1:8080']).proxies).toEqual([{ server: 'http://10.0.0.1:8080' }]);
   });
 
   it('keeps skip-seen off unless it is asked for', () => {

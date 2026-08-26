@@ -3,6 +3,7 @@ import type { BusinessRecord } from './types.js';
 import { extractPublicPhone, phoneFromDataItemId } from './phone.js';
 import { describeError } from './errors.js';
 import { mapWithWorkers } from './concurrency.js';
+import { type Throttle, parseRetryAfter } from './throttle.js';
 
 const empty = (): BusinessRecord => ({ businessName: '', mapsUrl: '', category: '', address: '', phone: '', website: '', websiteSource: 'maps', emails: [], contactPages: [], status: 'pending', errorMessage: '' });
 
@@ -28,11 +29,20 @@ const textOf = async (page: Page, selector: string, timeout: number) =>
 const attrOf = async (page: Page, selector: string, attribute: string, timeout: number) =>
   (await page.locator(selector).first().getAttribute(attribute, { timeout }).catch(() => null)) ?? '';
 
-async function readListing(page: Page, mapsUrl: string, timeoutMs: number, fieldTimeout: number): Promise<BusinessRecord> {
+async function readListing(page: Page, mapsUrl: string, timeoutMs: number, fieldTimeout: number, throttle?: Throttle): Promise<BusinessRecord> {
   const record = empty();
   record.mapsUrl = mapsUrl;
   try {
-    await page.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    // Costs nothing until Maps actually refuses us, at which point it paces every worker.
+    await throttle?.wait();
+    const response = await page.goto(mapsUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    if (response && [403, 429].includes(response.status())) {
+      throttle?.recordBlocked(parseRetryAfter(response.headers()['retry-after']));
+      record.status = 'maps_error';
+      record.errorMessage = `Google Maps refused the request (HTTP ${response.status()}). Slow the run down with --concurrency and --delay.`;
+      return record;
+    }
+    throttle?.recordSuccess();
     record.businessName = await textOf(page, 'h1', fieldTimeout);
     record.category = await textOf(page, categorySelector, fieldTimeout);
     const addressLabel = await attrOf(page, addressSelector, 'aria-label', fieldTimeout);
@@ -51,6 +61,7 @@ export async function collectMapsBusinesses(
   context: BrowserContext,
   options: { query: string; limit: number; timeoutMs: number; concurrency: number },
   onListing: (done: number, total: number) => void = () => {},
+  throttle?: Throttle,
 ): Promise<BusinessRecord[]> {
   const searchPage = await context.newPage();
   // Without this every locator falls back to Playwright's 30 s default and ignores --timeout entirely.
@@ -98,7 +109,7 @@ export async function collectMapsBusinesses(
     Math.min(options.concurrency, MAX_MAPS_CONCURRENCY),
     async () => { const page = await context.newPage(); page.setDefaultTimeout(options.timeoutMs); return page; },
     async (page, mapsUrl) => {
-      const record = await readListing(page, mapsUrl, options.timeoutMs, fieldTimeout);
+      const record = await readListing(page, mapsUrl, options.timeoutMs, fieldTimeout, throttle);
       onListing(++done, links.length);
       return record;
     },

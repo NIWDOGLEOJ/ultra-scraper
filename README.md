@@ -467,6 +467,55 @@ There is no direct Sheets upload — that would need Google OAuth credentials se
 Import the CSV instead (**File → Import → Upload**); it is written as UTF-8 with a byte-order mark,
 so accented and non-English business names come through intact.
 
+## Running at larger volumes
+
+Two things get harder as a run gets bigger: sites start refusing you, and everything comes from one
+IP address.
+
+### Backing off automatically
+
+The scraper watches for a refusal — HTTP 401, 403 or 429 from a business site, or 403/429 from
+Google Maps — and slows itself down when it sees one. Nothing needs to be configured.
+
+```
+Scanned 1 of 5 websites…
+Scanned 2 of 5 websites… · backing off to 7.0s
+```
+
+- Each refusal **doubles** the delay, so a run being rate-limited slows quickly rather than
+  hammering away. `--max-delay` is the ceiling (30s by default).
+- If the site sends a `Retry-After` header, **that wins**, even past `--max-delay` — retrying sooner
+  than a server asked just earns another refusal. It is still capped at 5 minutes, because past that
+  point failing the row beats stalling the whole run.
+- Recovery is gradual: after five clean scans in a row the delay halves, down to the `--delay` you
+  asked for and no further.
+- The Google Maps pass starts with **no** delay at all and only slows if Google actually pushes back,
+  so an ordinary run costs nothing extra.
+
+### Rotating proxies
+
+```sh
+npm run scrape -- "colleges in Chennai" --limit 200 --proxy "http://user:pass@p1.example:8080,http://p2.example:8080"
+```
+
+Each browser session takes the next proxy in the list, round-robin, so consecutive businesses are
+not all fetched from the same address. `http`, `https` and `socks5` are supported, credentials can
+be embedded in the URL, and a bare `host:port` is treated as `http://host:port`.
+
+A single proxy works too:
+
+```sh
+npm run scrape -- "cafes in Madurai" --limit 50 --proxy 10.0.0.1:8080
+```
+
+Proxies are used for everything the run does — Google Maps, business websites, and the optional web
+search — so nothing leaks around them.
+
+### If you are still getting blocked
+
+Lower `--concurrency` and raise `--delay`. Those two do more than anything else; the automatic
+backoff reacts to blocking, but starting gentler avoids provoking it.
+
 ## Common recipes
 
 | You want | Command |
@@ -480,6 +529,7 @@ so accented and non-English business names come through intact.
 | Continue a run you stopped | `npm run scrape -- "colleges in Chennai" --limit 100 --resume` |
 | Re-check a search for new businesses | `npm run scrape -- "colleges in Chennai" --limit 100 --skip-seen` |
 | Output for a script or pipeline | `npm run scrape -- "cafes in Madurai" --limit 20 --format json` |
+| A large run through proxies | `npm run scrape -- "colleges in Chennai" --limit 200 --proxy 10.0.0.1:8080,10.0.0.2:8080` |
 | Also chase businesses with no website | `npm run scrape -- "salons in Chennai" --limit 30 --web-search-fallback` |
 
 ## Contact filters
@@ -512,6 +562,8 @@ npm run scrape -- "dentists in Chennai" --limit 20 --contact both
 | `--resume` | Continues the last interrupted run of the same query and limit instead of starting over. |
 | `--skip-seen` | Skips businesses that earlier exports in the output folder already settled. |
 | `--format <list>` | Output formats, comma-separated: `csv`, `xlsx`, `json`, `jsonl`. Default: `csv,xlsx`. |
+| `--max-delay <milliseconds>` | Ceiling the delay can back off to when sites push back. Default: `30000`. |
+| `--proxy <list>` | Comma-separated proxies to rotate through. Default: none. |
 | `--headed` | Shows the automated browser window. |
 | `--help` | Lists every option. |
 
@@ -683,6 +735,8 @@ The source is small, plain TypeScript modules with no framework. Each file does 
 | `src/checkpoint.ts` | Saves and restores run progress so `--resume` can continue an interrupted scrape. |
 | `src/seen.ts` | Recognises a business across runs and reads which ones earlier exports settled. |
 | `src/csv.ts` | Reads CSV back in, for `--skip-seen`. |
+| `src/throttle.ts` | Adaptive pacing: backs off when a host refuses us, eases back when it stops. |
+| `src/proxy.ts` | Reads proxy addresses and hands them out round-robin. |
 | `src/exporter.ts` | Writes the CSV and `.xlsx` files and splits records into the outcome groups. |
 | `src/concurrency.ts` | Bounded parallel map, with and without a per-slot reusable resource. |
 | `src/retry.ts` | Retries transient network failures once; never retries permanent ones. |
@@ -710,8 +764,10 @@ Design decisions and their rationale are recorded in `docs/`, and the non-obviou
 site holds up its slot. Raise `--concurrency`, or lower `--timeout` (`--timeout 8000`) to give up
 on slow sites sooner.
 
-**Sites start returning `website_blocked`** — lower `--concurrency` and raise `--delay` to spread
-the requests out.
+**Sites start returning `website_blocked`** — the scraper already backs off on its own when this
+happens. If it keeps happening, lower `--concurrency` and raise `--delay` to spread the requests
+out, or route the run through proxies with `--proxy`. See
+[Running at larger volumes](#running-at-larger-volumes).
 
 ## Local web app, saved for later
 
@@ -725,7 +781,7 @@ It listens on `http://127.0.0.1:3000`, on the loopback address only. Set the `PO
 
 ## Development
 
-Run the test suite (110 tests across 14 files, no network access required):
+Run the test suite (135 tests across 16 files, no network access required):
 
 ```sh
 npm test
