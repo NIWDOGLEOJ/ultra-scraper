@@ -8,6 +8,16 @@ Use it for category-and-location searches such as `colleges in Chennai`, `dentis
 
 ## Quick start
 
+Already have **Node.js 20.6+**? Then it is four commands:
+
+```sh
+git clone https://github.com/NIWDOGLEOJ/ultra-scraper.git
+```
+
+```sh
+cd ultra-scraper
+```
+
 ```sh
 npm install
 ```
@@ -20,7 +30,9 @@ npm run setup:browser
 npm run scrape -- "colleges in Chennai" --limit 20
 ```
 
-Results land in `output/` as a timestamped `.csv` and `.xlsx` pair. On Linux, use `npm run setup:browser:linux` for the second step. Full detail on each step is below.
+Results land in `output/` as a timestamped `.csv` and `.xlsx` pair.
+
+On **Linux** the browser step is `npm run setup:browser:linux` instead — it also installs the system libraries Chromium needs. If you do not have Node.js yet, or want the step-by-step path for your operating system, see **[Installation](#installation)** below.
 
 ## What it collects
 
@@ -35,33 +47,232 @@ Emails are collected only when visibly published on a business website. The scra
 
 ## Requirements
 
-- **Node.js 20.6 or newer** (`node --version` to check)
-- Windows 10/11, macOS, or Linux
-- Internet connection
+| What | Version | Why it is needed |
+| --- | --- | --- |
+| **Node.js** | 20.6 or newer | Runs the scraper. Ships with `npm`, which installs everything else. |
+| **npm** | 10 or newer | Comes bundled with Node.js — no separate install. |
+| **Git** | any recent | Only to clone this repository. You can download a ZIP instead. |
+| **Chromium** | installed by Playwright | The browser the scraper drives. Downloaded in step 4, not installed system-wide. |
+| Disk space | ~700 MB | ~125 MB of npm packages in the project folder, plus ~550 MB for Chromium in a shared cache outside it. |
+| Internet | required | Both to install and to scrape. |
 
-## First-time setup
+Works on Windows 10/11, macOS 12 or newer (Intel and Apple Silicon), and mainstream Linux distributions.
 
-Install dependencies:
+### The packages `npm install` brings in
+
+You do not install these by hand — step 3 does it. Listed so you know what ends up on your machine:
+
+| Package | Kind | Purpose |
+| --- | --- | --- |
+| `playwright` | runtime | Launches and controls Chromium. |
+| `commander` | runtime | Parses the command-line options. |
+| `exceljs` | runtime | Writes the `.xlsx` exports. |
+| `typescript` | development | Type checking. |
+| `tsx` | development | Runs the TypeScript sources directly, so there is no build step. |
+| `vitest` | development | Test runner. |
+| `@types/node` | development | Type definitions for Node's standard library. |
+
+---
+
+## Installation
+
+Follow the five steps below. **Step 1 differs per operating system — jump to your platform.** Steps 2, 3 and 5 are identical everywhere; step 4 has a separate line for Linux.
+
+### Step 1 — Install Node.js 20.6+
+
+First check whether you already have it:
+
+```sh
+node --version
+```
+
+If that prints `v20.6.0` or higher, skip to step 2. If it prints a lower version or the command is not found, follow your platform below.
+
+<details open>
+<summary><b>Windows 10/11</b></summary>
+
+**Option A — winget (recommended, built into Windows 11 and modern Windows 10):**
+
+Open PowerShell and run:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+**Option B — the official installer:**
+
+1. Go to [nodejs.org](https://nodejs.org) and download the **LTS** Windows Installer (`.msi`).
+2. Run it and accept the defaults. Leave "Add to PATH" ticked — it is on by default.
+3. You do **not** need the optional "Tools for Native Modules" checkbox; this project has no native build step.
+
+**Then close your terminal and open a new one.** The `PATH` change only applies to newly opened windows — this is the single most common reason `node` still appears "not recognised" straight after installing.
+
+Verify:
+
+```powershell
+node --version
+npm --version
+```
+
+</details>
+
+<details open>
+<summary><b>macOS (Intel and Apple Silicon)</b></summary>
+
+**Option A — Homebrew:**
+
+If you do not have Homebrew, install it first from [brew.sh](https://brew.sh), then:
+
+```sh
+brew install node
+```
+
+**Option B — the official installer:**
+
+Download the **LTS** macOS installer (`.pkg`) from [nodejs.org](https://nodejs.org) and run it. It picks the right build for Intel or Apple Silicon automatically.
+
+Verify:
+
+```sh
+node --version
+npm --version
+```
+
+</details>
+
+<details open>
+<summary><b>Linux</b></summary>
+
+**Do not use `apt install nodejs` on its own.** Debian and Ubuntu ship an older Node in their default repositories — often 18, which is below the 20.6 this project needs. Use one of these instead.
+
+**Option A — nvm (works on every distribution, no root required):**
+
+```sh
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+```
+
+Close and reopen your terminal, then:
+
+```sh
+nvm install --lts
+```
+
+**Option B — NodeSource, for a system-wide install:**
+
+Debian / Ubuntu / Mint:
+
+```sh
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && sudo apt-get install -y nodejs
+```
+
+Fedora / RHEL / Rocky / Alma:
+
+```sh
+curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo -E bash - && sudo dnf install -y nodejs
+```
+
+Arch / Manjaro — the distribution's own package is current, so it is fine here:
+
+```sh
+sudo pacman -S nodejs npm
+```
+
+Verify:
+
+```sh
+node --version
+npm --version
+```
+
+</details>
+
+### Step 2 — Get the code
+
+With Git:
+
+```sh
+git clone https://github.com/NIWDOGLEOJ/ultra-scraper.git
+```
+
+```sh
+cd ultra-scraper
+```
+
+Without Git, download the ZIP from the repository's green **Code** button, extract it, and `cd` into the extracted folder.
+
+If you need Git: Windows `winget install Git.Git` · macOS `brew install git` (or Xcode Command Line Tools) · Debian/Ubuntu `sudo apt install git` · Fedora `sudo dnf install git`.
+
+### Step 3 — Install the project dependencies
+
+Run this in the project folder, on every platform:
 
 ```sh
 npm install
 ```
 
-Then install the browser the scraper drives. **Pick the line for your operating system:**
+This reads `package.json` and installs the seven packages listed above into a local `node_modules/` folder. Nothing is installed system-wide, and nothing outside this folder is touched. Takes roughly 30 seconds on a normal connection.
 
-Windows and macOS:
+### Step 4 — Install the Chromium browser
+
+Playwright downloads its own private copy of Chromium — it does not use, need, or modify any Chrome or Edge you already have. **Pick the line for your operating system.**
+
+**Windows and macOS:**
 
 ```sh
 npm run setup:browser
 ```
 
-Linux — the `--with-deps` form also installs the system libraries headless Chromium needs, and without them the browser will not start at all:
+**Linux:**
 
 ```sh
 npm run setup:browser:linux
 ```
 
-On Linux this step uses `apt`/`dnf` and will ask for your sudo password. If you cannot use sudo, ask an administrator to run `npx playwright install-deps chromium` once.
+The Linux form is different on purpose. The `--with-deps` flag it uses also installs the system libraries headless Chromium links against (`libnss3`, `libatk`, `libgbm`, and others). Without them Chromium will not start at all — it fails with a missing `.so` file. This step calls `apt` or `dnf` and will ask for your sudo password.
+
+If you cannot use sudo, ask an administrator to run this once:
+
+```sh
+npx playwright install-deps chromium
+```
+
+On Arch, `install-deps` is not supported; install the libraries yourself:
+
+```sh
+sudo pacman -S nss atk at-spi2-atk libcups libdrm gtk3 libxcomposite libxdamage libxrandr mesa libxkbcommon alsa-lib
+```
+
+The browser is stored in a shared Playwright cache **outside** the project folder, so deleting the project does not remove it, and a second Playwright project reuses the same download:
+
+| OS | Location |
+| --- | --- |
+| Windows | `%USERPROFILE%\AppData\Local\ms-playwright` |
+| macOS | `~/Library/Caches/ms-playwright` |
+| Linux | `~/.cache/ms-playwright` |
+
+To reclaim the space later, delete that folder.
+
+### Step 5 — Verify the installation
+
+Run the test suite. It is entirely offline — it never opens a browser or contacts Google:
+
+```sh
+npm test
+```
+
+You should see **45 tests passing across 10 files** in about a second. If that works, your Node.js and dependencies are correct.
+
+Then confirm the browser half works with a small real scrape:
+
+```sh
+npm run scrape -- "cafes in Chennai" --limit 3 --headed
+```
+
+`--headed` shows the browser window so you can watch it work. When it finishes, look in the `output/` folder for the generated `.csv` and `.xlsx` files.
+
+If the tests pass but this step fails, the problem is step 4 (Chromium), not step 3.
+
+---
 
 ## Run a scrape
 
