@@ -1,3 +1,5 @@
+import type { ExportFormat } from './exporter.js';
+
 export interface ScrapeOptions {
   query: string;
   limit: number;
@@ -9,6 +11,9 @@ export interface ScrapeOptions {
   concurrency: number;
   deep: boolean;
   webSearchFallback: boolean;
+  resume: boolean;
+  skipSeen: boolean;
+  formats: ExportFormat[];
   contactFilter: 'both' | 'emails' | 'phones';
 }
 

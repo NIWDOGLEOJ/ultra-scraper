@@ -11,3 +11,6 @@ dist/
 
 # Claude Code worktrees and local state
 .claude/
+
+# Saved run progress — same personal data as the exports
+.checkpoints/

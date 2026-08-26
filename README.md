@@ -332,6 +332,141 @@ Read it like this:
   by name, not confirmed by the business.
 - **`error_message`** is plain English and worth reading on any failed row.
 
+## Stopping and resuming a long run
+
+Long runs save their progress as they go, so a crash or `Ctrl-C` does not send you back to the
+start. Progress is written to `<output>/.checkpoints/` after the listings are collected and
+periodically while websites are being scanned.
+
+Press `Ctrl-C` and the scraper tells you how to pick up where it left off:
+
+```
+Stopped. Progress saved — continue with:
+  npm run scrape -- "engineering colleges in Chennai" --limit 30 --resume
+```
+
+Running that command skips the Google Maps pass entirely and scans only the businesses that were
+never reached:
+
+```
+Resuming: 10 of 25 listings already done.
+Scanning 15 websites (8 at a time)…
+```
+
+Details worth knowing:
+
+- A saved run is identified by its **query and `--limit` together**. Change either one and you get
+  a fresh run, because the set of listings would be different.
+- `--resume` with nothing saved is not an error. It says so and runs normally.
+- The saved file is **deleted once the exports are written**, so a completed run leaves nothing behind.
+- Stopping mid-scan can still lose the last couple of websites that were in flight when you pressed
+  `Ctrl-C`. They are simply rescanned on resume.
+- Checkpoints hold the same business data as the exports, so treat them as personal data too. They
+  live under your output folder, which `.gitignore` already excludes.
+
+## Re-running a search later
+
+Run the same search a month later and it re-scrapes every business from scratch. `--skip-seen`
+reads the CSV exports already sitting in your output folder and skips the businesses they settled:
+
+```sh
+npm run scrape -- "engineering colleges in Chennai" --limit 30 --skip-seen
+```
+
+```
+Skipping 20 of 25 businesses already in earlier exports; 5 new to scan.
+Exported 5 businesses (3 public emails, 20 skipped as already seen)
+```
+
+**The export becomes a delta** — only the businesses actually scanned this time. That is the point:
+recurring scrapes tell you what is new rather than repeating what you already have. The count of
+skipped businesses is always reported, so a small file is never a surprise.
+
+### Failures are retried, not skipped
+
+A business counts as settled only if it reached `success`, `no_email_found` or `no_website`. Rows
+that timed out, were blocked, or errored are **deliberately scanned again** — those are usually
+temporary. In a real re-run of the example above, 3 of the 5 retried businesses succeeded the
+second time and produced emails that a blunter "skip everything already seen" would have lost:
+
+| Business | Before | After |
+| --- | --- | --- |
+| Saveetha Engineering College | `website_error` | `success` |
+| LICET | `website_error` | `success` |
+| Rajalakshmi Engineering College | `website_error` | `success` |
+| SKR Engineering College | `website_timeout` | `website_timeout` |
+| Velammal Engineering College | `website_blocked` | `website_blocked` |
+
+A third run then skipped 23 and retried only the two that keep failing.
+
+### How a business is recognised
+
+By the Google place id embedded in its Maps URL (`ChIJ…`), falling back to the older feature id, and
+finally to its name and address. Maps URLs carry parameters that change between runs, so whole-URL
+comparison would treat every business as new; the id is pulled out of the path instead.
+
+Note that the Maps listing pass still runs — the scraper has to see the listings to know which are
+new. The saving is on the website scanning, which is the slow part.
+
+## Feeding the results into something else
+
+CSV and Excel are for reading. For a pipeline, ask for JSON:
+
+```sh
+npm run scrape -- "dental clinics in Coimbatore" --limit 30 --format json
+```
+
+Any combination works, and each of the four output files is written in every format you list:
+
+```sh
+npm run scrape -- "cafes in Madurai" --limit 20 --format csv,json,jsonl
+```
+
+| Format | Shape | Good for |
+| --- | --- | --- |
+| `csv` | One row per business, UTF-8 with BOM, CRLF | Excel, Google Sheets, anything |
+| `xlsx` | Real spreadsheet | Reading and sharing |
+| `json` | One object: run metadata plus a `businesses` array | Loading a whole run at once |
+| `jsonl` | One business per line | Streaming, `jq`, line-by-line tools |
+
+`ndjson` is accepted as another name for `jsonl`.
+
+**JSON keeps real types.** In CSV, `emails` and `contact_pages` are collapsed into one
+semicolon-joined cell, and a phone number gets a leading apostrophe so spreadsheets do not read
+`+91…` as a formula. JSON has neither compromise — arrays stay arrays and the phone number is the
+phone number. That is the reason to use it downstream.
+
+The JSON file also records what produced it:
+
+```json
+{
+  "generatedAt": "2026-08-26T18:58:07.576Z",
+  "count": 6,
+  "query": "dental clinics in Coimbatore",
+  "limit": 6,
+  "contactFilter": "both",
+  "listingsCollected": 6,
+  "skippedSeen": 0,
+  "businesses": [ ... ]
+}
+```
+
+Working with it in `jq`:
+
+```sh
+jq -r '.businesses[] | select(.emails | length > 0) | .businessName + " -> " + (.emails | join("; "))' output/maps-emails-*.json
+```
+
+```sh
+jq -r 'select(.status == "success") | .website' output/maps-emails-*.jsonl
+```
+
+### Google Sheets
+
+There is no direct Sheets upload — that would need Google OAuth credentials set up on your account.
+Import the CSV instead (**File → Import → Upload**); it is written as UTF-8 with a byte-order mark,
+so accented and non-English business names come through intact.
+
 ## Common recipes
 
 | You want | Command |
@@ -342,6 +477,9 @@ Read it like this:
 | A large job, as fast as possible | `npm run scrape -- "colleges in Chennai" --limit 100 --timeout 10000` |
 | Gentle, if sites start blocking you | `npm run scrape -- "hotels in Chennai" --limit 40 --concurrency 3 --delay 2500` |
 | Save somewhere other than `output/` | `npm run scrape -- "gyms in Chennai" --limit 20 --output exports` |
+| Continue a run you stopped | `npm run scrape -- "colleges in Chennai" --limit 100 --resume` |
+| Re-check a search for new businesses | `npm run scrape -- "colleges in Chennai" --limit 100 --skip-seen` |
+| Output for a script or pipeline | `npm run scrape -- "cafes in Madurai" --limit 20 --format json` |
 | Also chase businesses with no website | `npm run scrape -- "salons in Chennai" --limit 30 --web-search-fallback` |
 
 ## Contact filters
@@ -371,6 +509,9 @@ npm run scrape -- "dentists in Chennai" --limit 20 --contact both
 | `--concurrency <number>` | Websites scanned at the same time, 1-16. Default: automatic (4-10, based on `--limit`). |
 | `--no-deep` | Skips the second search on sites that show no email on their obvious pages. |
 | `--web-search-fallback` | Off by default. For businesses with **no** website in Maps, tries to find one by web search. |
+| `--resume` | Continues the last interrupted run of the same query and limit instead of starting over. |
+| `--skip-seen` | Skips businesses that earlier exports in the output folder already settled. |
+| `--format <list>` | Output formats, comma-separated: `csv`, `xlsx`, `json`, `jsonl`. Default: `csv,xlsx`. |
 | `--headed` | Shows the automated browser window. |
 | `--help` | Lists every option. |
 
@@ -466,7 +607,7 @@ Unrelated third-party domains are dropped whenever at least one of the above was
 
 ## Output files
 
-Each run writes timestamped CSV and Excel (`.xlsx`) files. All four files from one run share a single timestamp, so they sort together. The main result uses the prefix `maps-emails-` and follows your selected `--contact` filter.
+Each run writes timestamped files in whichever formats `--format` lists (CSV and Excel by default). All four files from one run share a single timestamp, so they sort together. The main result uses the prefix `maps-emails-` and follows your selected `--contact` filter.
 
 | File prefix | Contains |
 | --- | --- |
@@ -539,6 +680,9 @@ The source is small, plain TypeScript modules with no framework. Each file does 
 | `src/contact-links.ts` | Ranks a page's links to pick the best few contact/about pages to follow. |
 | `src/domain.ts` | Reduces a hostname to the registrable domain, so `www.` and subdomains still match. |
 | `src/web-search.ts` | The opt-in web-search fallback: the directory block list, the name-match check, and result parsing. |
+| `src/checkpoint.ts` | Saves and restores run progress so `--resume` can continue an interrupted scrape. |
+| `src/seen.ts` | Recognises a business across runs and reads which ones earlier exports settled. |
+| `src/csv.ts` | Reads CSV back in, for `--skip-seen`. |
 | `src/exporter.ts` | Writes the CSV and `.xlsx` files and splits records into the outcome groups. |
 | `src/concurrency.ts` | Bounded parallel map, with and without a per-slot reusable resource. |
 | `src/retry.ts` | Retries transient network failures once; never retries permanent ones. |
@@ -581,7 +725,7 @@ It listens on `http://127.0.0.1:3000`, on the loopback address only. Set the `PO
 
 ## Development
 
-Run the test suite (72 tests across 11 files, no network access required):
+Run the test suite (110 tests across 14 files, no network access required):
 
 ```sh
 npm test

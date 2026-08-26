@@ -4,10 +4,12 @@ import { DESKTOP_USER_AGENT, blockHeavyResources, scanWebsite } from './website-
 import { exportRecords, splitRecordsByOutcome } from './exporter.js';
 import { mapWithConcurrency } from './concurrency.js';
 import { findWebsiteBySearch } from './web-search.js';
+import { CheckpointSaver, checkpointPath, countScanned, deleteCheckpoint, pendingRecords, readCheckpoint } from './checkpoint.js';
+import { businessKey, loadSeenKeys } from './seen.js';
 import type { BusinessRecord, ScrapeOptions } from './types.js';
 
-export type ProgressEvent = { stage: 'starting' | 'collecting_maps' | 'searching_websites' | 'scanning_websites' | 'exporting' | 'complete' | 'failed'; message: string; processed: number; total: number; emailsFound: number };
-export type RunSummary = { businessesProcessed: number; emailsFound: number; listingsCollected: number; csvPath: string; xlsxPath: string };
+export type ProgressEvent = { stage: 'starting' | 'collecting_maps' | 'searching_websites' | 'scanning_websites' | 'exporting' | 'complete' | 'interrupted' | 'failed'; message: string; processed: number; total: number; emailsFound: number };
+export type RunSummary = { businessesProcessed: number; emailsFound: number; listingsCollected: number; skippedSeen: number; csvPath: string; xlsxPath: string; paths: string[] };
 export type ContactFilter = 'both' | 'emails' | 'phones';
 
 export const createRunSummary = (records: Array<Pick<BusinessRecord, 'emails'>>, listingsCollected = records.length) => ({ businessesProcessed: records.length, emailsFound: records.reduce((total, record) => total + record.emails.length, 0), listingsCollected });
@@ -37,21 +39,69 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
     throw new Error(`Could not start Chromium. Run "npx playwright install chromium" first (on Linux use "npx playwright install --with-deps chromium").\n\nOriginal error: ${message}`);
   });
 
-  // Without this, Ctrl-C leaves an orphaned Chromium process behind on every platform.
-  const onSignal = () => { void browser.close().catch(() => {}).finally(() => process.exit(130)); };
+  const savePath = checkpointPath(options.outputDir, options.query, options.limit);
+  const saver = new CheckpointSaver(savePath, { query: options.query, limit: options.limit });
+  let records: BusinessRecord[] = [];
+  let searchCompleted = false;
+  let skippedSeen = 0;
+
+  // Ctrl-C must not throw away everything the run has already paid for.
+  let aborting = false;
+  const onSignal = () => {
+    if (aborting) return;               // a second Ctrl-C should not race the first
+    aborting = true;
+    void (async () => {
+      // Save once now, then again after the browser closes: shutting it down settles the scans
+      // still in flight, and the second save captures whichever of them finished in time.
+      await saver.save(records, searchCompleted, true).catch(() => {});
+      await browser.close().catch(() => {});
+      await saver.save(records, searchCompleted, true).catch(() => {});
+      emit('interrupted', `Stopped. Progress saved — continue with:\n  npm run scrape -- "${options.query}" --limit ${options.limit} --resume`, countScanned(records), records.length);
+      process.exit(130);
+    })();
+  };
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
 
   try {
-    const mapsContext = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-US', viewport: { width: 1366, height: 900 } });
-    await blockHeavyResources(mapsContext);
-    emit('collecting_maps', 'Collecting Google Maps listings…');
-    const records = await collectMapsBusinesses(mapsContext, options, (done, total) => emit('collecting_maps', `Read listing ${done} of ${total}…`, done, total));
-    await mapsContext.close().catch(() => {});
+    let resumed = false;
+    if (options.resume) {
+      const saved = await readCheckpoint(savePath);
+      if (saved) {
+        records = saved.records;
+        searchCompleted = saved.searchCompleted;
+        resumed = true;
+        emit('collecting_maps', `Resuming: ${countScanned(records)} of ${records.length} listings already done.`, countScanned(records), records.length);
+      } else {
+        emit('collecting_maps', 'No saved progress found for this query and limit — starting a fresh run.');
+      }
+    }
+
+    if (!resumed) {
+      const mapsContext = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-US', viewport: { width: 1366, height: 900 } });
+      await blockHeavyResources(mapsContext);
+      emit('collecting_maps', 'Collecting Google Maps listings…');
+      records = await collectMapsBusinesses(mapsContext, options, (done, total) => emit('collecting_maps', `Read listing ${done} of ${total}…`, done, total));
+      await mapsContext.close().catch(() => {});
+
+      // Drop businesses an earlier export in this folder already settled, before paying to scan
+      // them again. Rows that failed last time are not treated as settled, so they get retried.
+      if (options.skipSeen) {
+        const seen = await loadSeenKeys(options.outputDir);
+        const collected = records.length;
+        records = records.filter((record) => !seen.has(businessKey(record)));
+        skippedSeen = collected - records.length;
+        emit('collecting_maps', skippedSeen > 0
+          ? `Skipping ${skippedSeen} of ${collected} businesses already in earlier exports; ${records.length} new to scan.`
+          : `No businesses from earlier exports to skip; all ${collected} are new.`, 0, records.length);
+      }
+      // The listing pass is the expensive part to repeat, so bank it before scanning starts.
+      await saver.save(records, searchCompleted, true);
+    }
 
     for (const record of records) if (record.status !== 'maps_error' && !record.website) record.status = 'no_website';
 
-    if (options.webSearchFallback) {
+    if (options.webSearchFallback && !searchCompleted) {
       const missing = records.filter((record) => record.status === 'no_website');
       if (missing.length > 0) {
         let searched = 0;
@@ -70,36 +120,47 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
           await pause(options.delayMs);
         });
       }
+      searchCompleted = true;
+      await saver.save(records, searchCompleted, true);
     }
 
-    let emailsFound = 0;
+    let emailsFound = records.reduce((total, record) => total + record.emails.length, 0);
     let scanned = 0;
-    const scannable = records.filter((record) => record.status !== 'maps_error' && record.website);
+    const scannable = pendingRecords(records);
 
-    emit('scanning_websites', `Scanning ${scannable.length} websites (${options.concurrency} at a time)…`, 0, scannable.length, 0);
+    emit('scanning_websites', `Scanning ${scannable.length} websites (${options.concurrency} at a time)…`, 0, scannable.length, emailsFound);
     await mapWithConcurrency(scannable, options.concurrency, async (record) => {
+      if (aborting) return;             // queued work stops starting the moment Ctrl-C lands
       Object.assign(record, await scanWebsite(browser, record.website, options));
       emailsFound += record.emails.length;
       scanned += 1;
       emit('scanning_websites', `Scanned ${scanned} of ${scannable.length} websites…`, scanned, scannable.length, emailsFound);
+      await saver.save(records, searchCompleted);
       // Politeness delay, applied per worker rather than globally.
       await pause(options.delayMs);
     });
+    await saver.flush(records, searchCompleted);
 
     const exportedRecords = filterRecords(records, options.contactFilter);
-    emit('exporting', 'Creating CSV and Excel files…', exportedRecords.length, records.length, emailsFound);
+    emit('exporting', `Writing ${options.formats.join(', ')} files…`, exportedRecords.length, records.length, emailsFound);
 
     // One timestamp for the whole run, so a run's four files sort and read as a set.
     const stampedAt = new Date();
     const groups = splitRecordsByOutcome(records);
+    const exportOptions = { formats: options.formats };
     const [files] = await Promise.all([
-      exportRecords(exportedRecords, options.outputDir, stampedAt),
-      exportRecords(groups.contacts, options.outputDir, stampedAt, 'contacts'),
-      exportRecords(groups.noContact, options.outputDir, stampedAt, 'no-contact'),
-      exportRecords(groups.failures, options.outputDir, stampedAt, 'failures'),
+      exportRecords(exportedRecords, options.outputDir, stampedAt, 'maps-emails', {
+        ...exportOptions,
+        meta: { query: options.query, limit: options.limit, contactFilter: options.contactFilter, listingsCollected: records.length, skippedSeen },
+      }),
+      exportRecords(groups.contacts, options.outputDir, stampedAt, 'contacts', exportOptions),
+      exportRecords(groups.noContact, options.outputDir, stampedAt, 'no-contact', exportOptions),
+      exportRecords(groups.failures, options.outputDir, stampedAt, 'failures', exportOptions),
     ]);
 
-    const summary = { ...createRunSummary(exportedRecords, records.length), ...files };
+    // The run's output is on disk now, so the saved progress has nothing left to protect.
+    await deleteCheckpoint(savePath).catch(() => {});
+    const summary = { ...createRunSummary(exportedRecords, records.length), skippedSeen, csvPath: files.csvPath, xlsxPath: files.xlsxPath, paths: files.paths };
     emit('complete', `Finished. ${summary.businessesProcessed} of ${summary.listingsCollected} listings matched your filter.`, summary.businessesProcessed, summary.listingsCollected, emailsFound);
     return summary;
   } catch (error) {

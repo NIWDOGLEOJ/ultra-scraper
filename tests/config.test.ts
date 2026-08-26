@@ -14,12 +14,15 @@ describe('parseOptions', () => {
       concurrency: 5,
       deep: true,
       webSearchFallback: false,
+      resume: false,
+      skipSeen: false,
+      formats: ['csv', 'xlsx'],
       contactFilter: 'both',
     });
   });
 
   it('parses supported options', () => {
-    expect(parseOptions(['bakeries in Madurai', '--limit', '5', '--output', 'exports', '--headed', '--delay', '500', '--timeout', '8000', '--max-emails', '10', '--concurrency', '8', '--contact', 'emails'])).toEqual({
+    expect(parseOptions(['bakeries in Madurai', '--limit', '5', '--output', 'exports', '--headed', '--delay', '500', '--timeout', '8000', '--max-emails', '10', '--concurrency', '8', '--format', 'json,jsonl', '--contact', 'emails'])).toEqual({
       query: 'bakeries in Madurai',
       limit: 5,
       outputDir: 'exports',
@@ -30,6 +33,9 @@ describe('parseOptions', () => {
       concurrency: 8,
       deep: true,
       webSearchFallback: false,
+      resume: false,
+      skipSeen: false,
+      formats: ['json', 'jsonl'],
       contactFilter: 'emails',
     });
   });
@@ -42,11 +48,23 @@ describe('parseOptions', () => {
     expect(() => parseOptions(['cafes', '--contact', 'socials'])).toThrow('contact');
     expect(() => parseOptions(['cafes', '--concurrency', '0'])).toThrow('concurrency');
     expect(() => parseOptions(['cafes', '--concurrency', '99'])).toThrow('16 or less');
+    expect(() => parseOptions(['cafes', '--format', 'pdf'])).toThrow('Not recognised: pdf');
+    expect(() => parseOptions(['cafes', '--format', ' '])).toThrow('at least one');
   });
 
   it('keeps the web-search fallback off unless it is asked for', () => {
     expect(parseOptions(['cafes']).webSearchFallback).toBe(false);
     expect(parseOptions(['cafes', '--web-search-fallback']).webSearchFallback).toBe(true);
+  });
+
+  it('keeps resume off unless it is asked for', () => {
+    expect(parseOptions(['cafes']).resume).toBe(false);
+    expect(parseOptions(['cafes', '--resume']).resume).toBe(true);
+  });
+
+  it('keeps skip-seen off unless it is asked for', () => {
+    expect(parseOptions(['cafes']).skipSeen).toBe(false);
+    expect(parseOptions(['cafes', '--skip-seen']).skipSeen).toBe(true);
   });
 
   it('points the user at --help instead of printing a raw commander error twice', () => {
