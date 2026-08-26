@@ -364,6 +364,50 @@ Details worth knowing:
 - Checkpoints hold the same business data as the exports, so treat them as personal data too. They
   live under your output folder, which `.gitignore` already excludes.
 
+## Re-running a search later
+
+Run the same search a month later and it re-scrapes every business from scratch. `--skip-seen`
+reads the CSV exports already sitting in your output folder and skips the businesses they settled:
+
+```sh
+npm run scrape -- "engineering colleges in Chennai" --limit 30 --skip-seen
+```
+
+```
+Skipping 20 of 25 businesses already in earlier exports; 5 new to scan.
+Exported 5 businesses (3 public emails, 20 skipped as already seen)
+```
+
+**The export becomes a delta** — only the businesses actually scanned this time. That is the point:
+recurring scrapes tell you what is new rather than repeating what you already have. The count of
+skipped businesses is always reported, so a small file is never a surprise.
+
+### Failures are retried, not skipped
+
+A business counts as settled only if it reached `success`, `no_email_found` or `no_website`. Rows
+that timed out, were blocked, or errored are **deliberately scanned again** — those are usually
+temporary. In a real re-run of the example above, 3 of the 5 retried businesses succeeded the
+second time and produced emails that a blunter "skip everything already seen" would have lost:
+
+| Business | Before | After |
+| --- | --- | --- |
+| Saveetha Engineering College | `website_error` | `success` |
+| LICET | `website_error` | `success` |
+| Rajalakshmi Engineering College | `website_error` | `success` |
+| SKR Engineering College | `website_timeout` | `website_timeout` |
+| Velammal Engineering College | `website_blocked` | `website_blocked` |
+
+A third run then skipped 23 and retried only the two that keep failing.
+
+### How a business is recognised
+
+By the Google place id embedded in its Maps URL (`ChIJ…`), falling back to the older feature id, and
+finally to its name and address. Maps URLs carry parameters that change between runs, so whole-URL
+comparison would treat every business as new; the id is pulled out of the path instead.
+
+Note that the Maps listing pass still runs — the scraper has to see the listings to know which are
+new. The saving is on the website scanning, which is the slow part.
+
 ## Common recipes
 
 | You want | Command |
@@ -375,6 +419,7 @@ Details worth knowing:
 | Gentle, if sites start blocking you | `npm run scrape -- "hotels in Chennai" --limit 40 --concurrency 3 --delay 2500` |
 | Save somewhere other than `output/` | `npm run scrape -- "gyms in Chennai" --limit 20 --output exports` |
 | Continue a run you stopped | `npm run scrape -- "colleges in Chennai" --limit 100 --resume` |
+| Re-check a search for new businesses | `npm run scrape -- "colleges in Chennai" --limit 100 --skip-seen` |
 | Also chase businesses with no website | `npm run scrape -- "salons in Chennai" --limit 30 --web-search-fallback` |
 
 ## Contact filters
@@ -405,6 +450,7 @@ npm run scrape -- "dentists in Chennai" --limit 20 --contact both
 | `--no-deep` | Skips the second search on sites that show no email on their obvious pages. |
 | `--web-search-fallback` | Off by default. For businesses with **no** website in Maps, tries to find one by web search. |
 | `--resume` | Continues the last interrupted run of the same query and limit instead of starting over. |
+| `--skip-seen` | Skips businesses that earlier exports in the output folder already settled. |
 | `--headed` | Shows the automated browser window. |
 | `--help` | Lists every option. |
 
@@ -574,6 +620,8 @@ The source is small, plain TypeScript modules with no framework. Each file does 
 | `src/domain.ts` | Reduces a hostname to the registrable domain, so `www.` and subdomains still match. |
 | `src/web-search.ts` | The opt-in web-search fallback: the directory block list, the name-match check, and result parsing. |
 | `src/checkpoint.ts` | Saves and restores run progress so `--resume` can continue an interrupted scrape. |
+| `src/seen.ts` | Recognises a business across runs and reads which ones earlier exports settled. |
+| `src/csv.ts` | Reads CSV back in, for `--skip-seen`. |
 | `src/exporter.ts` | Writes the CSV and `.xlsx` files and splits records into the outcome groups. |
 | `src/concurrency.ts` | Bounded parallel map, with and without a per-slot reusable resource. |
 | `src/retry.ts` | Retries transient network failures once; never retries permanent ones. |
@@ -616,7 +664,7 @@ It listens on `http://127.0.0.1:3000`, on the loopback address only. Set the `PO
 
 ## Development
 
-Run the test suite (84 tests across 12 files, no network access required):
+Run the test suite (102 tests across 14 files, no network access required):
 
 ```sh
 npm test

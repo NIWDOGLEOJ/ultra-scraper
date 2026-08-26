@@ -15,6 +15,7 @@ describe('parseOptions', () => {
       deep: true,
       webSearchFallback: false,
       resume: false,
+      skipSeen: false,
       contactFilter: 'both',
     });
   });
@@ -32,6 +33,7 @@ describe('parseOptions', () => {
       deep: true,
       webSearchFallback: false,
       resume: false,
+      skipSeen: false,
       contactFilter: 'emails',
     });
   });
@@ -54,6 +56,11 @@ describe('parseOptions', () => {
   it('keeps resume off unless it is asked for', () => {
     expect(parseOptions(['cafes']).resume).toBe(false);
     expect(parseOptions(['cafes', '--resume']).resume).toBe(true);
+  });
+
+  it('keeps skip-seen off unless it is asked for', () => {
+    expect(parseOptions(['cafes']).skipSeen).toBe(false);
+    expect(parseOptions(['cafes', '--skip-seen']).skipSeen).toBe(true);
   });
 
   it('points the user at --help instead of printing a raw commander error twice', () => {

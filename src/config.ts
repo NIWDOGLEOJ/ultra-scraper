@@ -43,6 +43,7 @@ export function parseOptions(argv: string[]): ScrapeOptions {
     .option('--no-deep', 'skip the extra search on sites that show no email on their obvious pages')
     .option('--web-search-fallback', 'for businesses with no website in Maps, look one up with a web search')
     .option('--resume', 'continue the last interrupted run of this same query and limit')
+    .option('--skip-seen', 'skip businesses that earlier exports in the output folder already settled')
     .option('--contact <type>', 'export businesses with both, emails, or phones', 'both')
     // commander writes its own error text before we ever see the exception, which would print
     // every usage error twice. Help and version still go to stdout normally.
@@ -75,6 +76,7 @@ export function parseOptions(argv: string[]): ScrapeOptions {
     deep: options.deep !== false,
     webSearchFallback: Boolean(options.webSearchFallback),
     resume: Boolean(options.resume),
+    skipSeen: Boolean(options.skipSeen),
     contactFilter: contactFilter as ScrapeOptions['contactFilter'],
   };
 }

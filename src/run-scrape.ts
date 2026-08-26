@@ -5,10 +5,11 @@ import { exportRecords, splitRecordsByOutcome } from './exporter.js';
 import { mapWithConcurrency } from './concurrency.js';
 import { findWebsiteBySearch } from './web-search.js';
 import { CheckpointSaver, checkpointPath, countScanned, deleteCheckpoint, pendingRecords, readCheckpoint } from './checkpoint.js';
+import { businessKey, loadSeenKeys } from './seen.js';
 import type { BusinessRecord, ScrapeOptions } from './types.js';
 
 export type ProgressEvent = { stage: 'starting' | 'collecting_maps' | 'searching_websites' | 'scanning_websites' | 'exporting' | 'complete' | 'interrupted' | 'failed'; message: string; processed: number; total: number; emailsFound: number };
-export type RunSummary = { businessesProcessed: number; emailsFound: number; listingsCollected: number; csvPath: string; xlsxPath: string };
+export type RunSummary = { businessesProcessed: number; emailsFound: number; listingsCollected: number; skippedSeen: number; csvPath: string; xlsxPath: string };
 export type ContactFilter = 'both' | 'emails' | 'phones';
 
 export const createRunSummary = (records: Array<Pick<BusinessRecord, 'emails'>>, listingsCollected = records.length) => ({ businessesProcessed: records.length, emailsFound: records.reduce((total, record) => total + record.emails.length, 0), listingsCollected });
@@ -42,6 +43,7 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
   const saver = new CheckpointSaver(savePath, { query: options.query, limit: options.limit });
   let records: BusinessRecord[] = [];
   let searchCompleted = false;
+  let skippedSeen = 0;
 
   // Ctrl-C must not throw away everything the run has already paid for.
   let aborting = false;
@@ -81,6 +83,18 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
       emit('collecting_maps', 'Collecting Google Maps listings…');
       records = await collectMapsBusinesses(mapsContext, options, (done, total) => emit('collecting_maps', `Read listing ${done} of ${total}…`, done, total));
       await mapsContext.close().catch(() => {});
+
+      // Drop businesses an earlier export in this folder already settled, before paying to scan
+      // them again. Rows that failed last time are not treated as settled, so they get retried.
+      if (options.skipSeen) {
+        const seen = await loadSeenKeys(options.outputDir);
+        const collected = records.length;
+        records = records.filter((record) => !seen.has(businessKey(record)));
+        skippedSeen = collected - records.length;
+        emit('collecting_maps', skippedSeen > 0
+          ? `Skipping ${skippedSeen} of ${collected} businesses already in earlier exports; ${records.length} new to scan.`
+          : `No businesses from earlier exports to skip; all ${collected} are new.`, 0, records.length);
+      }
       // The listing pass is the expensive part to repeat, so bank it before scanning starts.
       await saver.save(records, searchCompleted, true);
     }
@@ -142,7 +156,7 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
 
     // The run's output is on disk now, so the saved progress has nothing left to protect.
     await deleteCheckpoint(savePath).catch(() => {});
-    const summary = { ...createRunSummary(exportedRecords, records.length), ...files };
+    const summary = { ...createRunSummary(exportedRecords, records.length), skippedSeen, ...files };
     emit('complete', `Finished. ${summary.businessesProcessed} of ${summary.listingsCollected} listings matched your filter.`, summary.businessesProcessed, summary.listingsCollected, emailsFound);
     return summary;
   } catch (error) {

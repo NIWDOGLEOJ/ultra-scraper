@@ -10,6 +10,7 @@ export interface ScrapeOptions {
   deep: boolean;
   webSearchFallback: boolean;
   resume: boolean;
+  skipSeen: boolean;
   contactFilter: 'both' | 'emails' | 'phones';
 }
 
