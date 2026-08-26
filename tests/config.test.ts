@@ -12,6 +12,8 @@ describe('parseOptions', () => {
       timeoutMs: 15_000,
       maxEmails: 25,
       concurrency: 5,
+      deep: true,
+      webSearchFallback: false,
       contactFilter: 'both',
     });
   });
@@ -26,6 +28,8 @@ describe('parseOptions', () => {
       timeoutMs: 8_000,
       maxEmails: 10,
       concurrency: 8,
+      deep: true,
+      webSearchFallback: false,
       contactFilter: 'emails',
     });
   });
@@ -38,6 +42,11 @@ describe('parseOptions', () => {
     expect(() => parseOptions(['cafes', '--contact', 'socials'])).toThrow('contact');
     expect(() => parseOptions(['cafes', '--concurrency', '0'])).toThrow('concurrency');
     expect(() => parseOptions(['cafes', '--concurrency', '99'])).toThrow('16 or less');
+  });
+
+  it('keeps the web-search fallback off unless it is asked for', () => {
+    expect(parseOptions(['cafes']).webSearchFallback).toBe(false);
+    expect(parseOptions(['cafes', '--web-search-fallback']).webSearchFallback).toBe(true);
   });
 
   it('points the user at --help instead of printing a raw commander error twice', () => {

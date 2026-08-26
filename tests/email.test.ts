@@ -52,3 +52,13 @@ it('unglues a phone number that innerText concatenated onto an address', () => {
 it('does not mangle addresses that legitimately contain digits', () => {
   expect(extractEmails('schooladmission2023@gmail.com 123@college.edu.in 2023admissions@school.in')).toEqual(['schooladmission2023@gmail.com', '123@college.edu.in', '2023admissions@school.in']);
 });
+
+it('reads addresses written for humans rather than parsers', () => {
+  expect(extractEmails('Write to info [at] college [dot] edu [dot] in')).toEqual(['info@college.edu.in']);
+  expect(extractEmails('admissions (at) school (dot) ac (dot) in')).toEqual(['admissions@school.ac.in']);
+  expect(extractEmails('office&#64;clinic.in and help&#x40;clinic.in')).toEqual(['office@clinic.in', 'help@clinic.in']);
+});
+
+it('leaves ordinary prose containing "at" alone', () => {
+  expect(extractEmails('Meet us at noon at the college gate. Reach reception@college.edu.in')).toEqual(['reception@college.edu.in']);
+});

@@ -4,7 +4,7 @@ import { extractPublicPhone, phoneFromDataItemId } from './phone.js';
 import { describeError } from './errors.js';
 import { mapWithWorkers } from './concurrency.js';
 
-const empty = (): BusinessRecord => ({ businessName: '', mapsUrl: '', category: '', address: '', phone: '', website: '', emails: [], contactPages: [], status: 'pending', errorMessage: '' });
+const empty = (): BusinessRecord => ({ businessName: '', mapsUrl: '', category: '', address: '', phone: '', website: '', websiteSource: 'maps', emails: [], contactPages: [], status: 'pending', errorMessage: '' });
 
 export const mapsSearchSelector = '#searchboxinput, input[aria-label*="Search"], input[placeholder*="Search"]';
 export const consentButtonSelector = 'button:has-text("Reject all"), button:has-text("Accept all"), button:has-text("I agree")';

@@ -15,6 +15,29 @@ const ROLE_ADDRESS = /^(?:info|contact|contactus|admin|administration|admission|
 
 const domainOf = (email: string) => email.slice(email.indexOf('@') + 1);
 
+// Only the bracketed forms are treated as obfuscation. A bare " at " is far too common in
+// ordinary prose ("meet us at noon") to rewrite safely.
+const OBFUSCATED_AT = /\s*[[({<]\s*(?:at|@)\s*[\])}>]\s*/gi;
+const OBFUSCATED_DOT = /\s*[[({<]\s*(?:dot|\.)\s*[\])}>]\s*/gi;
+const NUMERIC_ENTITY = /&#(\d{1,7});/g;
+const HEX_ENTITY = /&#x([0-9a-f]{1,6});/gi;
+
+const codePoint = (value: number) => (value > 0 && value <= 0x10FFFF ? String.fromCodePoint(value) : '');
+
+/**
+ * Restores addresses a site published for human readers rather than for parsers:
+ * "info [at] college [dot] edu" and "info&#64;college.edu" are both plainly visible on the page.
+ */
+export function readableText(text: string): string {
+  return text
+    .replace(NUMERIC_ENTITY, (_, digits: string) => codePoint(Number(digits)))
+    .replace(HEX_ENTITY, (_, hex: string) => codePoint(parseInt(hex, 16)))
+    .replace(/&commat;/gi, '@')
+    .replace(/&period;/gi, '.')
+    .replace(OBFUSCATED_AT, '@')
+    .replace(OBFUSCATED_DOT, '.');
+}
+
 function expandMailto(href: string): string[] {
   let raw = href.replace(/^mailto:/i, '').split('?')[0] ?? '';
   try { raw = decodeURIComponent(raw); } catch { /* a malformed escape is still worth scanning as-is */ }
@@ -31,7 +54,7 @@ function normalise(candidate: string): string {
 }
 
 export function extractEmails(text: string, mailtoHrefs: string[] = []): string[] {
-  const candidates = [...mailtoHrefs.flatMap(expandMailto), ...(text.match(EMAIL_PATTERN) ?? [])];
+  const candidates = [...mailtoHrefs.flatMap(expandMailto), ...(readableText(text).match(EMAIL_PATTERN) ?? [])];
   return [...new Set(candidates.map(normalise).filter(Boolean))];
 }
 

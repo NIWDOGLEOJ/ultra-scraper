@@ -8,7 +8,7 @@ import type { BusinessRecord } from '../src/types.js';
 
 const record = (over: Partial<BusinessRecord> = {}): BusinessRecord => ({
   businessName: 'Café Périyar', mapsUrl: 'https://maps.example/x', category: 'College', address: 'Chennai',
-  phone: '+91 44 1234 5678', website: 'https://cafe.in', emails: ['info@cafe.in'], contactPages: [],
+  phone: '+91 44 1234 5678', website: 'https://cafe.in', websiteSource: 'maps', emails: ['info@cafe.in'], contactPages: [],
   status: 'success', errorMessage: '', ...over,
 });
 
@@ -38,4 +38,20 @@ it('quotes embedded quotes and newlines so multi-line addresses stay in one fiel
   const dir = await mkdtemp(join(tmpdir(), 'scraper-'));
   const { csvPath } = await exportRecords([record({ address: 'Line "A"\nLine B' })], dir);
   expect(await readFile(csvPath, 'utf8')).toContain('"Line ""A""\nLine B"');
+});
+
+it('records how each website was found, in both output formats', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'scraper-'));
+  const { csvPath, xlsxPath } = await exportRecords([record(), record({ businessName: 'Found by search', websiteSource: 'search' })], dir);
+
+  const csv = await readFile(csvPath, 'utf8');
+  expect(csv).toContain('"website_source"');
+  expect(csv).toContain('"maps"');
+  expect(csv).toContain('"search"');
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(xlsxPath);
+  const sheet = workbook.getWorksheet('Businesses');
+  expect(sheet?.getRow(1).getCell(7).value).toBe('website_source');
+  expect(sheet?.getRow(3).getCell(7).value).toBe('search');
 });

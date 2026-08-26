@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import ExcelJS from 'exceljs';
 import type { BusinessRecord } from './types.js';
 
-const columns: Array<[keyof BusinessRecord, string]> = [['businessName','business_name'],['mapsUrl','maps_url'],['category','category'],['address','address'],['phone','phone'],['website','website'],['emails','emails'],['contactPages','contact_pages'],['status','status'],['errorMessage','error_message']];
+const columns: Array<[keyof BusinessRecord, string]> = [['businessName','business_name'],['mapsUrl','maps_url'],['category','category'],['address','address'],['phone','phone'],['website','website'],['websiteSource','website_source'],['emails','emails'],['contactPages','contact_pages'],['status','status'],['errorMessage','error_message']];
 
 /** Spreadsheets treat a leading =, +, - or @ as a formula, so CSV cells get a text-forcing prefix. */
 const csvSafe = (value: string) => /^[=+\-@]/.test(value) ? `'${value}` : value;

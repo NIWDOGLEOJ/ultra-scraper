@@ -1,18 +1,22 @@
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { extractEmails, selectBusinessEmails } from './email.js';
-import { selectContactUrls } from './contact-links.js';
+import { guessContactUrls, selectContactUrls } from './contact-links.js';
 import type { WebsiteScanResult } from './types.js';
 import { retryOnce } from './retry.js';
 import { describeError } from './errors.js';
 
 export const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const SKIPPED_RESOURCES = new Set(['image', 'media', 'font']);
+const CERT_ERROR = /ERR_CERT|ERR_SSL|SSL_ERROR|ERR_BAD_SSL/i;
+
+export const FIRST_PASS_PAGES = 3;
+/** Extra pages searched only for sites that yielded nothing on the obvious contact pages. */
+export const DEEP_PASS_PAGES = 6;
 
 /** Images, video and webfonts are never a source of contact details — and on Google Maps the
  *  map tiles and business photos are the bulk of the page weight. */
 export const blockHeavyResources = (context: BrowserContext) =>
   context.route('**/*', (route) => SKIPPED_RESOURCES.has(route.request().resourceType()) ? route.abort() : route.continue());
-const CERT_ERROR = /ERR_CERT|ERR_SSL|SSL_ERROR|ERR_BAD_SSL/i;
 
 export function classifyScanError(message: string): string {
   if (/timeout|timed out/i.test(message)) return 'website_timeout';
@@ -21,7 +25,7 @@ export function classifyScanError(message: string): string {
 }
 
 type PageLink = { href: string; text: string };
-type ScanOptions = { timeoutMs: number; maxEmails: number };
+type ScanOptions = { timeoutMs: number; maxEmails: number; deep: boolean };
 
 async function readPage(page: Page, url: string, timeoutMs: number, emails: Set<string>, contactPages: Set<string>): Promise<PageLink[]> {
   const response = await retryOnce(() => page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs }));
@@ -31,7 +35,12 @@ async function readPage(page: Page, url: string, timeoutMs: number, emails: Set<
   await page.waitForLoadState('load', { timeout: Math.min(timeoutMs, 5000) }).catch(() => {});
   const text = await page.locator('body').innerText({ timeout: Math.min(timeoutMs, 10_000) }).catch(() => '');
   const mailto = await page.locator('a[href^="mailto:"]').evaluateAll((els) => els.map((el) => (el as HTMLAnchorElement).href)).catch(() => [] as string[]);
-  for (const email of extractEmails(text, mailto)) emails.add(email);
+  // Many sites publish the address as machine-readable structured data even when the visible
+  // page only shows a contact form.
+  const structured = await page.locator('script[type="application/ld+json"], [itemprop="email"], [data-email]')
+    .evaluateAll((els) => els.map((el) => `${el.textContent ?? ''} ${el.getAttribute('data-email') ?? ''} ${el.getAttribute('content') ?? ''}`))
+    .catch(() => [] as string[]);
+  for (const email of extractEmails([text, ...structured].join('\n'), mailto)) emails.add(email);
   contactPages.add(page.url());
   return page.locator('a[href]').evaluateAll((els) => els.map((el) => ({ href: (el as HTMLAnchorElement).href, text: (el.textContent ?? '').trim().slice(0, 120) }))).catch(() => [] as PageLink[]);
 }
@@ -42,15 +51,22 @@ async function scanOnce(browser: Browser, website: string, options: ScanOptions,
   const context = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-US', viewport: { width: 1366, height: 900 }, ignoreHTTPSErrors });
   const emails = new Set<string>();
   const contactPages = new Set<string>();
+  const visited = new Set<string>();
   try {
     await blockHeavyResources(context);
     const page = await context.newPage();
     page.setDefaultTimeout(options.timeoutMs);
     page.on('dialog', (dialog) => void dialog.dismiss().catch(() => {}));
 
+    let firstError = '';
+    const visit = async (url: string): Promise<PageLink[]> => {
+      visited.add(url.replace(/\/$/, ''));
+      return readPage(page, url, options.timeoutMs, emails, contactPages);
+    };
+
     let links: PageLink[];
     try {
-      links = await readPage(page, website, options.timeoutMs, emails, contactPages);
+      links = await visit(website);
     } catch (error) {
       const message = describeError(error, 'Website scan failed');
       return { emails: [], contactPages: [], status: classifyScanError(message), errorMessage: message };
@@ -59,20 +75,35 @@ async function scanOnce(browser: Browser, website: string, options: ScanOptions,
     // Rank contact links against the URL we actually landed on: a site that redirects
     // apex -> www would otherwise have every one of its own links rejected as off-site.
     const landedUrl = page.url();
-    let firstContactError = '';
-    for (const url of selectContactUrls(landedUrl, links)) {
-      if (url === page.url()) continue;
+    visited.add(landedUrl.replace(/\/$/, ''));
+
+    for (const url of selectContactUrls(landedUrl, links, FIRST_PASS_PAGES)) {
+      if (visited.has(url.replace(/\/$/, ''))) continue;
       // A failing contact page must not discard the emails the homepage already gave us.
-      try { await readPage(page, url, options.timeoutMs, emails, contactPages); }
-      catch (error) { if (!firstContactError) firstContactError = describeError(error, 'Contact page failed'); }
+      try { await visit(url); }
+      catch (error) { if (!firstError) firstError = describeError(error, 'Contact page failed'); }
     }
 
-    const selected = selectBusinessEmails([...emails], landedUrl, options.maxEmails);
+    const found = () => selectBusinessEmails([...emails], landedUrl, options.maxEmails);
+
+    // Second pass, only for the sites that published nothing where we looked first. Widens the
+    // link patterns and tries contact pages that exist but are only linked from JavaScript menus.
+    if (options.deep && found().length === 0) {
+      const wider = selectContactUrls(landedUrl, links, DEEP_PASS_PAGES, true);
+      const candidates = [...wider, ...guessContactUrls(landedUrl, visited)].filter((url) => !visited.has(url.replace(/\/$/, '')));
+      for (const url of candidates.slice(0, DEEP_PASS_PAGES)) {
+        try { await visit(url); }
+        catch (error) { if (!firstError) firstError = describeError(error, 'Contact page failed'); }
+        if (found().length > 0) break;   // any address beats none; stop paying for more pages
+      }
+    }
+
+    const selected = found();
     return {
       emails: selected,
       contactPages: [...contactPages],
       status: selected.length > 0 ? 'success' : 'no_email_found',
-      errorMessage: firstContactError,
+      errorMessage: firstError,
     };
   } finally {
     await context.close().catch(() => {});
