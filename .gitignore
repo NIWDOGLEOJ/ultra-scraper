@@ -1,0 +1,10 @@
+node_modules/
+
+# Scraped contact data — real people's addresses. Keep it out of version control.
+output/
+exports/
+
+dist/
+*.log
+.DS_Store
+.env
