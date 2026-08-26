@@ -1,5 +1,6 @@
 import { Command, CommanderError } from 'commander';
 import type { ScrapeOptions } from './types.js';
+import { DEFAULT_FORMATS, parseFormats } from './exporter.js';
 
 const HELP_CODES = new Set(['commander.helpDisplayed', 'commander.help', 'commander.version']);
 
@@ -44,6 +45,7 @@ export function parseOptions(argv: string[]): ScrapeOptions {
     .option('--web-search-fallback', 'for businesses with no website in Maps, look one up with a web search')
     .option('--resume', 'continue the last interrupted run of this same query and limit')
     .option('--skip-seen', 'skip businesses that earlier exports in the output folder already settled')
+    .option('--format <formats>', 'comma-separated output formats: csv, xlsx, json, jsonl', DEFAULT_FORMATS.join(','))
     .option('--contact <type>', 'export businesses with both, emails, or phones', 'both')
     // commander writes its own error text before we ever see the exception, which would print
     // every usage error twice. Help and version still go to stdout normally.
@@ -77,6 +79,7 @@ export function parseOptions(argv: string[]): ScrapeOptions {
     webSearchFallback: Boolean(options.webSearchFallback),
     resume: Boolean(options.resume),
     skipSeen: Boolean(options.skipSeen),
+    formats: parseFormats(String(options.format)),
     contactFilter: contactFilter as ScrapeOptions['contactFilter'],
   };
 }

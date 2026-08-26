@@ -9,7 +9,7 @@ import { businessKey, loadSeenKeys } from './seen.js';
 import type { BusinessRecord, ScrapeOptions } from './types.js';
 
 export type ProgressEvent = { stage: 'starting' | 'collecting_maps' | 'searching_websites' | 'scanning_websites' | 'exporting' | 'complete' | 'interrupted' | 'failed'; message: string; processed: number; total: number; emailsFound: number };
-export type RunSummary = { businessesProcessed: number; emailsFound: number; listingsCollected: number; skippedSeen: number; csvPath: string; xlsxPath: string };
+export type RunSummary = { businessesProcessed: number; emailsFound: number; listingsCollected: number; skippedSeen: number; csvPath: string; xlsxPath: string; paths: string[] };
 export type ContactFilter = 'both' | 'emails' | 'phones';
 
 export const createRunSummary = (records: Array<Pick<BusinessRecord, 'emails'>>, listingsCollected = records.length) => ({ businessesProcessed: records.length, emailsFound: records.reduce((total, record) => total + record.emails.length, 0), listingsCollected });
@@ -142,21 +142,25 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
     await saver.flush(records, searchCompleted);
 
     const exportedRecords = filterRecords(records, options.contactFilter);
-    emit('exporting', 'Creating CSV and Excel files…', exportedRecords.length, records.length, emailsFound);
+    emit('exporting', `Writing ${options.formats.join(', ')} files…`, exportedRecords.length, records.length, emailsFound);
 
     // One timestamp for the whole run, so a run's four files sort and read as a set.
     const stampedAt = new Date();
     const groups = splitRecordsByOutcome(records);
+    const exportOptions = { formats: options.formats };
     const [files] = await Promise.all([
-      exportRecords(exportedRecords, options.outputDir, stampedAt),
-      exportRecords(groups.contacts, options.outputDir, stampedAt, 'contacts'),
-      exportRecords(groups.noContact, options.outputDir, stampedAt, 'no-contact'),
-      exportRecords(groups.failures, options.outputDir, stampedAt, 'failures'),
+      exportRecords(exportedRecords, options.outputDir, stampedAt, 'maps-emails', {
+        ...exportOptions,
+        meta: { query: options.query, limit: options.limit, contactFilter: options.contactFilter, listingsCollected: records.length, skippedSeen },
+      }),
+      exportRecords(groups.contacts, options.outputDir, stampedAt, 'contacts', exportOptions),
+      exportRecords(groups.noContact, options.outputDir, stampedAt, 'no-contact', exportOptions),
+      exportRecords(groups.failures, options.outputDir, stampedAt, 'failures', exportOptions),
     ]);
 
     // The run's output is on disk now, so the saved progress has nothing left to protect.
     await deleteCheckpoint(savePath).catch(() => {});
-    const summary = { ...createRunSummary(exportedRecords, records.length), skippedSeen, ...files };
+    const summary = { ...createRunSummary(exportedRecords, records.length), skippedSeen, csvPath: files.csvPath, xlsxPath: files.xlsxPath, paths: files.paths };
     emit('complete', `Finished. ${summary.businessesProcessed} of ${summary.listingsCollected} listings matched your filter.`, summary.businessesProcessed, summary.listingsCollected, emailsFound);
     return summary;
   } catch (error) {

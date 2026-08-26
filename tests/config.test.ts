@@ -16,12 +16,13 @@ describe('parseOptions', () => {
       webSearchFallback: false,
       resume: false,
       skipSeen: false,
+      formats: ['csv', 'xlsx'],
       contactFilter: 'both',
     });
   });
 
   it('parses supported options', () => {
-    expect(parseOptions(['bakeries in Madurai', '--limit', '5', '--output', 'exports', '--headed', '--delay', '500', '--timeout', '8000', '--max-emails', '10', '--concurrency', '8', '--contact', 'emails'])).toEqual({
+    expect(parseOptions(['bakeries in Madurai', '--limit', '5', '--output', 'exports', '--headed', '--delay', '500', '--timeout', '8000', '--max-emails', '10', '--concurrency', '8', '--format', 'json,jsonl', '--contact', 'emails'])).toEqual({
       query: 'bakeries in Madurai',
       limit: 5,
       outputDir: 'exports',
@@ -34,6 +35,7 @@ describe('parseOptions', () => {
       webSearchFallback: false,
       resume: false,
       skipSeen: false,
+      formats: ['json', 'jsonl'],
       contactFilter: 'emails',
     });
   });
@@ -46,6 +48,8 @@ describe('parseOptions', () => {
     expect(() => parseOptions(['cafes', '--contact', 'socials'])).toThrow('contact');
     expect(() => parseOptions(['cafes', '--concurrency', '0'])).toThrow('concurrency');
     expect(() => parseOptions(['cafes', '--concurrency', '99'])).toThrow('16 or less');
+    expect(() => parseOptions(['cafes', '--format', 'pdf'])).toThrow('Not recognised: pdf');
+    expect(() => parseOptions(['cafes', '--format', ' '])).toThrow('at least one');
   });
 
   it('keeps the web-search fallback off unless it is asked for', () => {

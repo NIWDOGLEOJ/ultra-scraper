@@ -408,6 +408,65 @@ comparison would treat every business as new; the id is pulled out of the path i
 Note that the Maps listing pass still runs — the scraper has to see the listings to know which are
 new. The saving is on the website scanning, which is the slow part.
 
+## Feeding the results into something else
+
+CSV and Excel are for reading. For a pipeline, ask for JSON:
+
+```sh
+npm run scrape -- "dental clinics in Coimbatore" --limit 30 --format json
+```
+
+Any combination works, and each of the four output files is written in every format you list:
+
+```sh
+npm run scrape -- "cafes in Madurai" --limit 20 --format csv,json,jsonl
+```
+
+| Format | Shape | Good for |
+| --- | --- | --- |
+| `csv` | One row per business, UTF-8 with BOM, CRLF | Excel, Google Sheets, anything |
+| `xlsx` | Real spreadsheet | Reading and sharing |
+| `json` | One object: run metadata plus a `businesses` array | Loading a whole run at once |
+| `jsonl` | One business per line | Streaming, `jq`, line-by-line tools |
+
+`ndjson` is accepted as another name for `jsonl`.
+
+**JSON keeps real types.** In CSV, `emails` and `contact_pages` are collapsed into one
+semicolon-joined cell, and a phone number gets a leading apostrophe so spreadsheets do not read
+`+91…` as a formula. JSON has neither compromise — arrays stay arrays and the phone number is the
+phone number. That is the reason to use it downstream.
+
+The JSON file also records what produced it:
+
+```json
+{
+  "generatedAt": "2026-08-26T18:58:07.576Z",
+  "count": 6,
+  "query": "dental clinics in Coimbatore",
+  "limit": 6,
+  "contactFilter": "both",
+  "listingsCollected": 6,
+  "skippedSeen": 0,
+  "businesses": [ ... ]
+}
+```
+
+Working with it in `jq`:
+
+```sh
+jq -r '.businesses[] | select(.emails | length > 0) | .businessName + " -> " + (.emails | join("; "))' output/maps-emails-*.json
+```
+
+```sh
+jq -r 'select(.status == "success") | .website' output/maps-emails-*.jsonl
+```
+
+### Google Sheets
+
+There is no direct Sheets upload — that would need Google OAuth credentials set up on your account.
+Import the CSV instead (**File → Import → Upload**); it is written as UTF-8 with a byte-order mark,
+so accented and non-English business names come through intact.
+
 ## Common recipes
 
 | You want | Command |
@@ -420,6 +479,7 @@ new. The saving is on the website scanning, which is the slow part.
 | Save somewhere other than `output/` | `npm run scrape -- "gyms in Chennai" --limit 20 --output exports` |
 | Continue a run you stopped | `npm run scrape -- "colleges in Chennai" --limit 100 --resume` |
 | Re-check a search for new businesses | `npm run scrape -- "colleges in Chennai" --limit 100 --skip-seen` |
+| Output for a script or pipeline | `npm run scrape -- "cafes in Madurai" --limit 20 --format json` |
 | Also chase businesses with no website | `npm run scrape -- "salons in Chennai" --limit 30 --web-search-fallback` |
 
 ## Contact filters
@@ -451,6 +511,7 @@ npm run scrape -- "dentists in Chennai" --limit 20 --contact both
 | `--web-search-fallback` | Off by default. For businesses with **no** website in Maps, tries to find one by web search. |
 | `--resume` | Continues the last interrupted run of the same query and limit instead of starting over. |
 | `--skip-seen` | Skips businesses that earlier exports in the output folder already settled. |
+| `--format <list>` | Output formats, comma-separated: `csv`, `xlsx`, `json`, `jsonl`. Default: `csv,xlsx`. |
 | `--headed` | Shows the automated browser window. |
 | `--help` | Lists every option. |
 
@@ -546,7 +607,7 @@ Unrelated third-party domains are dropped whenever at least one of the above was
 
 ## Output files
 
-Each run writes timestamped CSV and Excel (`.xlsx`) files. All four files from one run share a single timestamp, so they sort together. The main result uses the prefix `maps-emails-` and follows your selected `--contact` filter.
+Each run writes timestamped files in whichever formats `--format` lists (CSV and Excel by default). All four files from one run share a single timestamp, so they sort together. The main result uses the prefix `maps-emails-` and follows your selected `--contact` filter.
 
 | File prefix | Contains |
 | --- | --- |
@@ -664,7 +725,7 @@ It listens on `http://127.0.0.1:3000`, on the loopback address only. Set the `PO
 
 ## Development
 
-Run the test suite (102 tests across 14 files, no network access required):
+Run the test suite (110 tests across 14 files, no network access required):
 
 ```sh
 npm test
