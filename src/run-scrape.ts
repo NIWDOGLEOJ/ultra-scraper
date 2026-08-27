@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
 import { collectMapsBusinesses } from './maps-collector.js';
 import { DESKTOP_USER_AGENT, blockHeavyResources, scanWebsite } from './website-scanner.js';
-import { exportRecords, splitRecordsByOutcome } from './exporter.js';
+import { exportRecords } from './exporter.js';
 import { mapWithConcurrency } from './concurrency.js';
 import { findWebsiteBySearch } from './web-search.js';
 import { CheckpointSaver, checkpointPath, countScanned, deleteCheckpoint, pendingRecords, readCheckpoint } from './checkpoint.js';
@@ -156,19 +156,14 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
     const exportedRecords = filterRecords(records, options.contactFilter);
     emit('exporting', `Writing ${options.formats.join(', ')} files…`, exportedRecords.length, records.length, emailsFound);
 
-    // One timestamp for the whole run, so a run's four files sort and read as a set.
+    // One timestamp, so every format from a run sorts and reads as a set.
     const stampedAt = new Date();
-    const groups = splitRecordsByOutcome(records);
-    const exportOptions = { formats: options.formats };
-    const [files] = await Promise.all([
-      exportRecords(exportedRecords, options.outputDir, stampedAt, 'maps-emails', {
-        ...exportOptions,
-        meta: { query: options.query, limit: options.limit, contactFilter: options.contactFilter, listingsCollected: records.length, skippedSeen },
-      }),
-      exportRecords(groups.contacts, options.outputDir, stampedAt, 'contacts', exportOptions),
-      exportRecords(groups.noContact, options.outputDir, stampedAt, 'no-contact', exportOptions),
-      exportRecords(groups.failures, options.outputDir, stampedAt, 'failures', exportOptions),
-    ]);
+    // One file per requested format. The status column makes every earlier "group" file — contacts,
+    // no-contact, failures — a filter away, so writing them separately only duplicated the data.
+    const files = await exportRecords(exportedRecords, options.outputDir, stampedAt, 'maps-emails', {
+      formats: options.formats,
+      meta: { query: options.query, limit: options.limit, contactFilter: options.contactFilter, listingsCollected: records.length, skippedSeen },
+    });
 
     // The run's output is on disk now, so the saved progress has nothing left to protect.
     await deleteCheckpoint(savePath).catch(() => {});

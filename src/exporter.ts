@@ -3,11 +3,11 @@ import { join } from 'node:path';
 import ExcelJS from 'exceljs';
 import type { BusinessRecord } from './types.js';
 
-export type ExportFormat = 'csv' | 'xlsx' | 'json' | 'jsonl';
-export const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'xlsx', 'json', 'jsonl'];
+export type ExportFormat = 'csv' | 'xlsx' | 'json' | 'jsonl' | 'md';
+export const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'xlsx', 'json', 'jsonl', 'md'];
 export const DEFAULT_FORMATS: readonly ExportFormat[] = ['csv', 'xlsx'];
 /** ndjson is the same thing as jsonl, and people ask for it by either name. */
-const FORMAT_ALIASES: Record<string, ExportFormat> = { ndjson: 'jsonl' };
+const FORMAT_ALIASES: Record<string, ExportFormat> = { ndjson: 'jsonl', markdown: 'md' };
 
 export function parseFormats(value: string): ExportFormat[] {
   const requested = value.split(',').map((part) => part.trim().toLowerCase()).filter(Boolean);
@@ -29,6 +29,21 @@ const rawValue = (record: BusinessRecord, key: keyof BusinessRecord) => {
   return Array.isArray(value) ? value.join('; ') : String(value);
 };
 const csvCell = (value: string) => `"${value.replaceAll('"', '""')}"`;
+// A pipe would end the column and a newline would end the row, so both have to go.
+const mdCell = (value: string) => value.replaceAll('|', '\\|').replaceAll(/\r?\n/g, '<br>').trim();
+const mdLink = (label: string, url: string) => (url ? `[${label}](${url})` : '');
+const hostOf = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
+
+/**
+ * Markdown is meant to be read. A raw Maps URL is 250 characters and makes the table unusable, so
+ * link-shaped columns become compact links — the full URL is still there, just behind the label.
+ */
+function mdValue(record: BusinessRecord, key: keyof BusinessRecord): string {
+  if (key === 'mapsUrl') return mdLink('Maps', record.mapsUrl);
+  if (key === 'website') return mdLink(hostOf(record.website), record.website);
+  if (key === 'contactPages') return record.contactPages.map((url, index) => mdLink(String(index + 1), url)).join(' ');
+  return mdCell(rawValue(record, key));
+}
 
 export const fileStamp = (now: Date) => now.toISOString().replace(/[:.]/g, '-');
 
@@ -43,6 +58,7 @@ export interface ExportResult {
   xlsxPath: string;
   jsonPath: string;
   jsonlPath: string;
+  mdPath: string;
   paths: string[];
 }
 
@@ -51,7 +67,7 @@ export async function exportRecords(records: BusinessRecord[], outputDir: string
   await mkdir(outputDir, { recursive: true });
   const stamp = fileStamp(now);
   const pathFor = (extension: string) => join(outputDir, `${prefix}-${stamp}.${extension}`);
-  const result: ExportResult = { csvPath: '', xlsxPath: '', jsonPath: '', jsonlPath: '', paths: [] };
+  const result: ExportResult = { csvPath: '', xlsxPath: '', jsonPath: '', jsonlPath: '', mdPath: '', paths: [] };
 
   if (formats.includes('csv')) {
     const rows = [
@@ -87,18 +103,25 @@ export async function exportRecords(records: BusinessRecord[], outputDir: string
     await writeFile(result.jsonlPath, records.length > 0 ? body + '\n' : '', 'utf8');
   }
 
-  result.paths = [result.csvPath, result.xlsxPath, result.jsonPath, result.jsonlPath].filter(Boolean);
-  return result;
-}
-
-export function splitRecordsByOutcome<T extends Pick<BusinessRecord, 'phone' | 'emails' | 'status'>>(records: T[]) {
-  const contacts: T[] = []; const noContact: T[] = []; const failures: T[] = [];
-  for (const record of records) {
-    // A usable contact wins over a failed website scan: the README promises that `contacts-`
-    // holds every business with at least one public email or phone number.
-    if (record.phone.trim() || record.emails.length) contacts.push(record);
-    else if (/error|timeout|blocked/.test(record.status)) failures.push(record);
-    else noContact.push(record);
+  // Markdown is for reading and pasting somewhere — a heading with the run's shape, then a table.
+  if (formats.includes('md')) {
+    result.mdPath = pathFor('md');
+    const emails = records.reduce((total, record) => total + record.emails.length, 0);
+    const title = typeof options.meta?.query === 'string' ? `Ultra Scraper — ${options.meta.query}` : 'Ultra Scraper results';
+    const heading = [
+      `# ${title}`,
+      '',
+      `${now.toISOString()} · ${records.length} ${records.length === 1 ? 'business' : 'businesses'} · ${emails} public ${emails === 1 ? 'email' : 'emails'}`,
+      '',
+    ];
+    const table = [
+      `| ${columns.map(([, header]) => header).join(' | ')} |`,
+      `| ${columns.map(() => '---').join(' | ')} |`,
+      ...records.map((record) => `| ${columns.map(([key]) => mdValue(record, key)).join(' | ')} |`),
+    ];
+    await writeFile(result.mdPath, [...heading, ...table, ''].join('\n'), 'utf8');
   }
-  return { contacts, noContact, failures };
+
+  result.paths = [result.csvPath, result.xlsxPath, result.jsonPath, result.jsonlPath, result.mdPath].filter(Boolean);
+  return result;
 }

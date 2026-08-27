@@ -327,7 +327,7 @@ Read it like this:
   [the status table](#the-status-column). A `no_website` or `no_email_found` row is not a bug;
   it means that business published nothing to find.
 - **A row can be useful without an email.** The phone number comes from Maps, so it is there even
-  when the website failed. That is what the `contacts-` file is for.
+  when the website failed. Filter on `status` to separate those out.
 - **Check `website_source`** if you used `--web-search-fallback`. Rows marked `search` were matched
   by name, not confirmed by the business.
 - **`error_message`** is plain English and worth reading on any failed row.
@@ -416,11 +416,13 @@ CSV and Excel are for reading. For a pipeline, ask for JSON:
 npm run scrape -- "dental clinics in Coimbatore" --limit 30 --format json
 ```
 
-Any combination works, and each of the four output files is written in every format you list:
+One flag, one file. Ask for several and you get one of each:
 
 ```sh
-npm run scrape -- "cafes in Madurai" --limit 20 --format csv,json,jsonl
+npm run scrape -- "cafes in Madurai" --limit 20 --csv --json
 ```
+
+`--format csv,json` does the same thing and is easier to build up in a script.
 
 | Format | Shape | Good for |
 | --- | --- | --- |
@@ -428,8 +430,13 @@ npm run scrape -- "cafes in Madurai" --limit 20 --format csv,json,jsonl
 | `xlsx` | Real spreadsheet | Reading and sharing |
 | `json` | One object: run metadata plus a `businesses` array | Loading a whole run at once |
 | `jsonl` | One business per line | Streaming, `jq`, line-by-line tools |
+| `md` | A Markdown table with a heading | Pasting into a doc, issue or PR |
 
-`ndjson` is accepted as another name for `jsonl`.
+`ndjson` and `markdown` are accepted as other names for `jsonl` and `md`.
+
+Markdown is the one format that reshapes the data for readability: a raw Maps URL is 250 characters
+and would make the table unusable, so link columns become compact links — `[Maps](…)`,
+`[cafe.in](…)`, `[1](…) [2](…)` for contact pages. Nothing is lost; the URL is behind the label.
 
 **JSON keeps real types.** In CSV, `emails` and `contact_pages` are collapsed into one
 semicolon-joined cell, and a phone number gets a leading apostrophe so spreadsheets do not read
@@ -528,7 +535,8 @@ backoff reacts to blocking, but starting gentler avoids provoking it.
 | Save somewhere other than `output/` | `npm run scrape -- "gyms in Chennai" --limit 20 --output exports` |
 | Continue a run you stopped | `npm run scrape -- "colleges in Chennai" --limit 100 --resume` |
 | Re-check a search for new businesses | `npm run scrape -- "colleges in Chennai" --limit 100 --skip-seen` |
-| Output for a script or pipeline | `npm run scrape -- "cafes in Madurai" --limit 20 --format json` |
+| Output for a script or pipeline | `npm run scrape -- "cafes in Madurai" --limit 20 --json` |
+| A table to paste into a doc | `npm run scrape -- "cafes in Madurai" --limit 20 --md` |
 | A large run through proxies | `npm run scrape -- "colleges in Chennai" --limit 200 --proxy 10.0.0.1:8080,10.0.0.2:8080` |
 | Also chase businesses with no website | `npm run scrape -- "salons in Chennai" --limit 30 --web-search-fallback` |
 
@@ -561,7 +569,8 @@ npm run scrape -- "dentists in Chennai" --limit 20 --contact both
 | `--web-search-fallback` | Off by default. For businesses with **no** website in Maps, tries to find one by web search. |
 | `--resume` | Continues the last interrupted run of the same query and limit instead of starting over. |
 | `--skip-seen` | Skips businesses that earlier exports in the output folder already settled. |
-| `--format <list>` | Output formats, comma-separated: `csv`, `xlsx`, `json`, `jsonl`. Default: `csv,xlsx`. |
+| `--csv` `--xlsx` `--json` `--jsonl` `--md` | Which file to write. Give one for a single file, or several. Default: `--csv --xlsx`. |
+| `--format <list>` | The same choice as a list, for scripts: `--format csv,json`. Ignored if the flags above are used. |
 | `--max-delay <milliseconds>` | Ceiling the delay can back off to when sites push back. Default: `30000`. |
 | `--proxy <list>` | Comma-separated proxies to rotate through. Default: none. |
 | `--headed` | Shows the automated browser window. |
@@ -659,14 +668,19 @@ Unrelated third-party domains are dropped whenever at least one of the above was
 
 ## Output files
 
-Each run writes timestamped files in whichever formats `--format` lists (CSV and Excel by default). All four files from one run share a single timestamp, so they sort together. The main result uses the prefix `maps-emails-` and follows your selected `--contact` filter.
+Each run writes **one file per format you asked for**, named `maps-emails-<timestamp>`:
 
-| File prefix | Contains |
-| --- | --- |
-| `maps-emails-` | The main export, filtered by `--contact`. |
-| `contacts-` | Businesses with at least one public email or phone number. |
-| `no-contact-` | Businesses where no public email or phone number was found. |
-| `failures-` | Listings or websites that timed out, were blocked, or produced an error — and yielded no contact details. |
+```
+output/
+  maps-emails-2026-08-27T15-44-27-624Z.csv
+  maps-emails-2026-08-27T15-44-27-624Z.xlsx
+```
+
+Ask for a single format and you get a single file:
+
+```sh
+npm run scrape -- "cafes in Madurai" --limit 20 --csv
+```
 
 Every export contains: `business_name`, `maps_url`, `category`, `address`, `phone`, `website`,
 `website_source`, `emails`, `contact_pages`, `status`, and `error_message`.
@@ -675,7 +689,16 @@ Every export contains: `business_name`, `maps_url`, `category`, `address`, `phon
 `--web-search-fallback`. Rows marked `search` are worth a glance before you use them — the match
 was made by name, not confirmed by the business.
 
-CSV files are written as UTF-8 with a byte-order mark and CRLF line endings, so Excel on Windows opens non-English business names correctly instead of showing mojibake.
+CSV files are written as UTF-8 with a byte-order mark and CRLF line endings, so Excel on Windows
+opens non-English business names correctly instead of showing mojibake.
+
+Earlier versions also wrote separate `contacts-`, `no-contact-` and `failures-` files. They are
+gone: every one of them was a filter on the `status` column, which is in the export already, so
+they only duplicated the data. To get the same split, filter on `status` in your spreadsheet, or:
+
+```sh
+jq '.businesses[] | select(.status | test("error|timeout|blocked"))' output/maps-emails-*.json
+```
 
 ### The `status` column
 
@@ -689,7 +712,9 @@ CSV files are written as UTF-8 with a byte-order mark and CRLF line endings, so 
 | `website_error` | Any other website failure — DNS, TLS, connection reset. |
 | `maps_error` | The Maps listing itself could not be read. |
 
-A row can carry a phone number even when its status is a failure: the phone comes from Maps, the emails come from the website. That is why `contacts-` is keyed on "has an email or a phone", not on status.
+A row can carry a phone number even when its status is a failure: the phone comes from Maps, the
+emails come from the website. So when you filter, filter on what you need rather than assuming a
+failed row is worthless.
 
 ## How it works
 
@@ -781,7 +806,7 @@ It listens on `http://127.0.0.1:3000`, on the loopback address only. Set the `PO
 
 ## Development
 
-Run the test suite (135 tests across 16 files, no network access required):
+Run the test suite (139 tests across 15 files, no network access required):
 
 ```sh
 npm test

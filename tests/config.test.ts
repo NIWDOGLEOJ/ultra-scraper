@@ -68,6 +68,17 @@ describe('parseOptions', () => {
     expect(parseOptions(['cafes', '--resume']).resume).toBe(true);
   });
 
+  it('takes the format from per-format flags when they are given', () => {
+    expect(parseOptions(['cafes', '--csv']).formats).toEqual(['csv']);
+    expect(parseOptions(['cafes', '--md']).formats).toEqual(['md']);
+    expect(parseOptions(['cafes', '--json', '--csv']).formats).toEqual(['csv', 'json']);
+  });
+
+  it('falls back to --format, and lets the flags win when both are given', () => {
+    expect(parseOptions(['cafes', '--format', 'json,md']).formats).toEqual(['json', 'md']);
+    expect(parseOptions(['cafes', '--format', 'json', '--csv']).formats).toEqual(['csv']);
+  });
+
   it('uses no proxy unless one is named', () => {
     expect(parseOptions(['cafes']).proxies).toEqual([]);
     expect(parseOptions(['cafes', '--proxy', '10.0.0.1:8080']).proxies).toEqual([{ server: 'http://10.0.0.1:8080' }]);
