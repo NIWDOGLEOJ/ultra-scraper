@@ -275,6 +275,68 @@ If the tests pass but this step fails, the problem is step 4 (Chromium), not ste
 
 ---
 
+## Updating to a newer version
+
+If you already have Ultra Scraper and want the latest changes, run these three from the project
+folder:
+
+```sh
+git pull
+```
+
+```sh
+npm install
+```
+
+```sh
+npm run setup:browser
+```
+
+On **Linux** the last one is `npm run setup:browser:linux`.
+
+`npm install` picks up any new or changed dependencies, and `setup:browser` makes sure the Chromium
+build matches the Playwright version you now have — skipping it is the usual cause of
+"Could not start Chromium" after an update.
+
+Then check nothing you rely on has changed:
+
+```sh
+npm test
+```
+
+### Before you update, read this
+
+**[CHANGELOG.md](CHANGELOG.md) lists what changed in each version, and anything that breaks.**
+
+The one break so far is in **0.3.0**: a run used to write eight files per run — `maps-emails-`,
+`contacts-`, `no-contact-` and `failures-`, each as both CSV and Excel. It now writes **one file per
+format you ask for**. If you have a script reading `contacts-*.csv`, `no-contact-*.csv` or
+`failures-*.csv`, point it at `maps-emails-*.csv` and filter on the `status` column:
+
+| Old file | Same rows, from the one export |
+| --- | --- |
+| `contacts-` | `status` is `success`, or `phone` is not empty |
+| `no-contact-` | `status` is `no_email_found` or `no_website` |
+| `failures-` | `status` contains `error`, `timeout` or `blocked` |
+
+Nothing else changed shape. Files exported by older versions are still readable, and `--skip-seen`
+still reads them.
+
+### If an update goes wrong
+
+Your exports are never touched by an update, but you can go back to the previous version at any
+time:
+
+```sh
+git log --oneline
+```
+
+```sh
+git checkout <commit-before-the-update>
+```
+
+Return to the latest with `git checkout main`.
+
 ## Run a scrape
 
 The same command works in every shell — macOS/Linux Terminal, Windows PowerShell, and Windows `cmd`:
@@ -770,6 +832,7 @@ The source is small, plain TypeScript modules with no framework. Each file does 
 | `src/app.ts`, `src/web/` | The optional local web interface (see below). |
 | `tests/` | Vitest suites, one per module. |
 | `docs/` | Design specs and implementation plans written before the code. |
+| `CHANGELOG.md` | What changed in each version, and anything that breaks. |
 
 Design decisions and their rationale are recorded in `docs/`, and the non-obvious ones are commented at the point in the code where they matter.
 
