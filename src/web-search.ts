@@ -2,6 +2,7 @@ import type { Browser } from 'playwright';
 import { registrableDomain } from './domain.js';
 import { DESKTOP_USER_AGENT, blockHeavyResources } from './website-scanner.js';
 import { describeError } from './errors.js';
+import type { ProxyConfig } from './proxy.js';
 
 /**
  * Hosts that describe businesses rather than being them: directories, aggregators, review
@@ -154,8 +155,8 @@ export async function fetchApiResults(query: string, apiKey: string, timeoutMs: 
 }
 
 /** Fallback path with no API key: read a results page in the browser we already have running. */
-export async function fetchBrowserResults(browser: Browser, query: string, timeoutMs: number): Promise<SearchResult[]> {
-  const context = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-IN', viewport: { width: 1366, height: 900 } });
+export async function fetchBrowserResults(browser: Browser, query: string, timeoutMs: number, proxy?: ProxyConfig): Promise<SearchResult[]> {
+  const context = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-IN', viewport: { width: 1366, height: 900 }, proxy });
   try {
     await blockHeavyResources(context);
     const page = await context.newPage();
@@ -169,14 +170,14 @@ export async function fetchBrowserResults(browser: Browser, query: string, timeo
   }
 }
 
-export async function findWebsiteBySearch(browser: Browser, businessName: string, address: string, options: { timeoutMs: number }): Promise<{ website: string; error: string }> {
+export async function findWebsiteBySearch(browser: Browser, businessName: string, address: string, options: { timeoutMs: number; proxy?: ProxyConfig }): Promise<{ website: string; error: string }> {
   if (!businessName.trim()) return { website: '', error: '' };
   const query = buildSearchQuery(businessName, address);
   const apiKey = process.env.BRAVE_SEARCH_API_KEY?.trim();
   try {
     const results = apiKey
       ? await fetchApiResults(query, apiKey, options.timeoutMs)
-      : await fetchBrowserResults(browser, query, options.timeoutMs);
+      : await fetchBrowserResults(browser, query, options.timeoutMs, options.proxy);
     if (results.length === 0) return { website: '', error: 'search returned no results' };
     return { website: chooseCandidate(businessName, results), error: '' };
   } catch (error) {

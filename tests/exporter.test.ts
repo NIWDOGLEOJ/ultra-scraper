@@ -72,6 +72,52 @@ it('defaults to CSV and Excel, as before', async () => {
   expect(result.paths).toEqual([result.csvPath, result.xlsxPath]);
 });
 
+it('writes a Markdown table with a heading describing the run', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'scraper-'));
+  const rows = [record({ businessName: 'Cafe One', emails: ['a@cafe.in', 'b@cafe.in'] })];
+  const { mdPath } = await exportRecords(rows, dir, new Date(), 'maps-emails', { formats: ['md'], meta: { query: 'cafes in Madurai' } });
+
+  const md = await readFile(mdPath, 'utf8');
+  expect(md).toContain('# Ultra Scraper — cafes in Madurai');
+  expect(md).toContain('1 business · 2 public emails');
+  expect(md).toContain('| business_name | maps_url |');
+  expect(md).toContain('| Cafe One |');
+  expect(md).toContain('a@cafe.in; b@cafe.in');
+});
+
+it('renders link columns compactly so the table stays readable, without losing the URL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'scraper-'));
+  const rows = [record({
+    mapsUrl: 'https://www.google.com/maps/place/X/data=!4m7!3m6!1s0x3ba8591de6346f05:0xbeded3630a59adc5!8m2!3d11.01!4d76.94?authuser=0&hl=en',
+    website: 'https://www.drruchidental.com/',
+    contactPages: ['https://drruchidental.com/', 'https://drruchidental.com/contact-us/'],
+  })];
+  const { mdPath } = await exportRecords(rows, dir, new Date(), 'maps-emails', { formats: ['md'] });
+
+  const md = await readFile(mdPath, 'utf8');
+  expect(md).toContain('[Maps](https://www.google.com/maps/place/X/data=');
+  expect(md).toContain('[drruchidental.com](https://www.drruchidental.com/)');
+  expect(md).toContain('[1](https://drruchidental.com/) [2](https://drruchidental.com/contact-us/)');
+});
+
+it('escapes pipes and newlines so a messy address cannot break the table', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'scraper-'));
+  const rows = [record({ address: 'Unit 3 | Rear\nChennai' })];
+  const { mdPath } = await exportRecords(rows, dir, new Date(), 'maps-emails', { formats: ['md'] });
+
+  const md = await readFile(mdPath, 'utf8');
+  expect(md).toContain('Unit 3 \\| Rear<br>Chennai');
+  // Every row must still be exactly one line of the table.
+  const rowLines = md.split('\n').filter((line) => line.startsWith('|'));
+  expect(rowLines).toHaveLength(3);           // header, separator, one record
+});
+
+it('falls back to a generic Markdown heading when no query was recorded', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'scraper-'));
+  const { mdPath } = await exportRecords([record()], dir, new Date(), 'maps-emails', { formats: ['md'] });
+  expect(await readFile(mdPath, 'utf8')).toContain('# Ultra Scraper results');
+});
+
 it('keeps emails and contact pages as real arrays in JSON, with run metadata', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'scraper-'));
   const rows = [record({ emails: ['a@cafe.in', 'b@cafe.in'], contactPages: ['https://cafe.in/contact'] })];
@@ -112,8 +158,9 @@ describe('format parsing', () => {
     expect(parseFormats(' JSON , csv ,json')).toEqual(['json', 'csv']);
   });
 
-  it('treats ndjson as jsonl', () => {
+  it('accepts the long names people reach for', () => {
     expect(parseFormats('ndjson')).toEqual(['jsonl']);
+    expect(parseFormats('markdown')).toEqual(['md']);
   });
 
   it('rejects an unknown format and names it', () => {

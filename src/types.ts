@@ -1,4 +1,5 @@
 import type { ExportFormat } from './exporter.js';
+import type { ProxyConfig } from './proxy.js';
 
 export interface ScrapeOptions {
   query: string;
@@ -14,6 +15,8 @@ export interface ScrapeOptions {
   resume: boolean;
   skipSeen: boolean;
   formats: ExportFormat[];
+  maxDelayMs: number;
+  proxies: ProxyConfig[];
   contactFilter: 'both' | 'emails' | 'phones';
 }
 
@@ -36,4 +39,6 @@ export interface WebsiteScanResult {
   contactPages: string[];
   status: string;
   errorMessage: string;
+  /** Set when the site sent a Retry-After along with its refusal. */
+  retryAfterMs?: number;
 }

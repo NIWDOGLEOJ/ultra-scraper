@@ -4,6 +4,8 @@ import { guessContactUrls, selectContactUrls } from './contact-links.js';
 import type { WebsiteScanResult } from './types.js';
 import { retryOnce } from './retry.js';
 import { describeError } from './errors.js';
+import { parseRetryAfter } from './throttle.js';
+import type { ProxyConfig } from './proxy.js';
 
 export const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const SKIPPED_RESOURCES = new Set(['image', 'media', 'font']);
@@ -25,11 +27,14 @@ export function classifyScanError(message: string): string {
 }
 
 type PageLink = { href: string; text: string };
-type ScanOptions = { timeoutMs: number; maxEmails: number; deep: boolean };
+type ScanOptions = { timeoutMs: number; maxEmails: number; deep: boolean; proxy?: ProxyConfig };
 
 async function readPage(page: Page, url: string, timeoutMs: number, emails: Set<string>, contactPages: Set<string>): Promise<PageLink[]> {
   const response = await retryOnce(() => page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs }));
-  if (response && [401, 403, 429].includes(response.status())) throw new Error(`blocked (HTTP ${response.status()})`);
+  if (response && [401, 403, 429].includes(response.status())) {
+    // Carry the server's own instruction back up, so the run can pace itself by what it was told.
+    throw Object.assign(new Error(`blocked (HTTP ${response.status()})`), { retryAfterMs: parseRetryAfter(response.headers()['retry-after']) });
+  }
   // Client-rendered sites paint their contact details after DOMContentLoaded; give them a moment,
   // but never let a site that streams forever hold the run hostage.
   await page.waitForLoadState('load', { timeout: Math.min(timeoutMs, 5000) }).catch(() => {});
@@ -48,7 +53,7 @@ async function readPage(page: Page, url: string, timeoutMs: number, emails: Set<
 async function scanOnce(browser: Browser, website: string, options: ScanOptions, ignoreHTTPSErrors: boolean): Promise<WebsiteScanResult> {
   // A fresh context per business keeps cookies, storage, popups and dialogs from one site
   // out of the next one's results, and guarantees they are torn down when the site is done.
-  const context = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-US', viewport: { width: 1366, height: 900 }, ignoreHTTPSErrors });
+  const context = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-US', viewport: { width: 1366, height: 900 }, ignoreHTTPSErrors, proxy: options.proxy });
   const emails = new Set<string>();
   const contactPages = new Set<string>();
   const visited = new Set<string>();
@@ -69,7 +74,8 @@ async function scanOnce(browser: Browser, website: string, options: ScanOptions,
       links = await visit(website);
     } catch (error) {
       const message = describeError(error, 'Website scan failed');
-      return { emails: [], contactPages: [], status: classifyScanError(message), errorMessage: message };
+      const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs;
+      return { emails: [], contactPages: [], status: classifyScanError(message), errorMessage: message, ...(retryAfterMs ? { retryAfterMs } : {}) };
     }
 
     // Rank contact links against the URL we actually landed on: a site that redirects

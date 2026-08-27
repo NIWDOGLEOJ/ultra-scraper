@@ -1,11 +1,13 @@
 import { chromium } from 'playwright';
 import { collectMapsBusinesses } from './maps-collector.js';
 import { DESKTOP_USER_AGENT, blockHeavyResources, scanWebsite } from './website-scanner.js';
-import { exportRecords, splitRecordsByOutcome } from './exporter.js';
+import { exportRecords } from './exporter.js';
 import { mapWithConcurrency } from './concurrency.js';
 import { findWebsiteBySearch } from './web-search.js';
 import { CheckpointSaver, checkpointPath, countScanned, deleteCheckpoint, pendingRecords, readCheckpoint } from './checkpoint.js';
 import { businessKey, loadSeenKeys } from './seen.js';
+import { Throttle } from './throttle.js';
+import { ProxyRotation } from './proxy.js';
 import type { BusinessRecord, ScrapeOptions } from './types.js';
 
 export type ProgressEvent = { stage: 'starting' | 'collecting_maps' | 'searching_websites' | 'scanning_websites' | 'exporting' | 'complete' | 'interrupted' | 'failed'; message: string; processed: number; total: number; emailsFound: number };
@@ -34,7 +36,9 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
   const emit = (stage: ProgressEvent['stage'], message: string, processed = 0, total = 0, emailsFound = 0) => onProgress({ stage, message, processed, total, emailsFound });
   emit('starting', 'Starting browser…');
 
-  const browser = await chromium.launch({ headless: !options.headed, args: launchArgs() }).catch((error: unknown) => {
+  const rotation = new ProxyRotation(options.proxies);
+  // Chromium only honours a per-context proxy when the browser itself was launched with one.
+  const browser = await chromium.launch({ headless: !options.headed, args: launchArgs(), proxy: rotation.first() }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Could not start Chromium. Run "npx playwright install chromium" first (on Linux use "npx playwright install --with-deps chromium").\n\nOriginal error: ${message}`);
   });
@@ -44,6 +48,10 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
   let records: BusinessRecord[] = [];
   let searchCompleted = false;
   let skippedSeen = 0;
+  // Maps starts at full speed and only slows if Google pushes back; business sites start at the
+  // pace the run asked for and back off from there.
+  const mapsThrottle = new Throttle({ baseDelayMs: 0, maxDelayMs: options.maxDelayMs });
+  const siteThrottle = new Throttle({ baseDelayMs: options.delayMs, maxDelayMs: options.maxDelayMs });
 
   // Ctrl-C must not throw away everything the run has already paid for.
   let aborting = false;
@@ -78,10 +86,10 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
     }
 
     if (!resumed) {
-      const mapsContext = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-US', viewport: { width: 1366, height: 900 } });
+      const mapsContext = await browser.newContext({ userAgent: DESKTOP_USER_AGENT, locale: 'en-US', viewport: { width: 1366, height: 900 }, proxy: rotation.next() });
       await blockHeavyResources(mapsContext);
       emit('collecting_maps', 'Collecting Google Maps listings…');
-      records = await collectMapsBusinesses(mapsContext, options, (done, total) => emit('collecting_maps', `Read listing ${done} of ${total}…`, done, total));
+      records = await collectMapsBusinesses(mapsContext, options, (done, total) => emit('collecting_maps', `Read listing ${done} of ${total}…`, done, total), mapsThrottle);
       await mapsContext.close().catch(() => {});
 
       // Drop businesses an earlier export in this folder already settled, before paying to scan
@@ -107,7 +115,7 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
         let searched = 0;
         emit('searching_websites', `Looking up ${missing.length} businesses with no website in Maps…`, 0, missing.length, 0);
         await mapWithConcurrency(missing, Math.min(options.concurrency, MAX_SEARCH_CONCURRENCY), async (record) => {
-          const { website, error } = await findWebsiteBySearch(browser, record.businessName, record.address, options);
+          const { website, error } = await findWebsiteBySearch(browser, record.businessName, record.address, { ...options, proxy: rotation.next() });
           if (website) {
             record.website = website;
             record.websiteSource = 'search';
@@ -131,32 +139,31 @@ export async function runScrape(options: ScrapeOptions, onProgress: (event: Prog
     emit('scanning_websites', `Scanning ${scannable.length} websites (${options.concurrency} at a time)…`, 0, scannable.length, emailsFound);
     await mapWithConcurrency(scannable, options.concurrency, async (record) => {
       if (aborting) return;             // queued work stops starting the moment Ctrl-C lands
-      Object.assign(record, await scanWebsite(browser, record.website, options));
+      const scan = await scanWebsite(browser, record.website, { ...options, proxy: rotation.next() });
+      Object.assign(record, scan);
+      if (scan.status === 'website_blocked') siteThrottle.recordBlocked(scan.retryAfterMs);
+      else siteThrottle.recordSuccess();
       emailsFound += record.emails.length;
       scanned += 1;
-      emit('scanning_websites', `Scanned ${scanned} of ${scannable.length} websites…`, scanned, scannable.length, emailsFound);
+      const paced = siteThrottle.isBackedOff ? ` · backing off to ${(siteThrottle.delayMs / 1000).toFixed(1)}s` : '';
+      emit('scanning_websites', `Scanned ${scanned} of ${scannable.length} websites…${paced}`, scanned, scannable.length, emailsFound);
       await saver.save(records, searchCompleted);
-      // Politeness delay, applied per worker rather than globally.
-      await pause(options.delayMs);
+      // Politeness delay, applied per worker rather than globally, and widened if sites push back.
+      await siteThrottle.wait();
     });
     await saver.flush(records, searchCompleted);
 
     const exportedRecords = filterRecords(records, options.contactFilter);
     emit('exporting', `Writing ${options.formats.join(', ')} files…`, exportedRecords.length, records.length, emailsFound);
 
-    // One timestamp for the whole run, so a run's four files sort and read as a set.
+    // One timestamp, so every format from a run sorts and reads as a set.
     const stampedAt = new Date();
-    const groups = splitRecordsByOutcome(records);
-    const exportOptions = { formats: options.formats };
-    const [files] = await Promise.all([
-      exportRecords(exportedRecords, options.outputDir, stampedAt, 'maps-emails', {
-        ...exportOptions,
-        meta: { query: options.query, limit: options.limit, contactFilter: options.contactFilter, listingsCollected: records.length, skippedSeen },
-      }),
-      exportRecords(groups.contacts, options.outputDir, stampedAt, 'contacts', exportOptions),
-      exportRecords(groups.noContact, options.outputDir, stampedAt, 'no-contact', exportOptions),
-      exportRecords(groups.failures, options.outputDir, stampedAt, 'failures', exportOptions),
-    ]);
+    // One file per requested format. The status column makes every earlier "group" file — contacts,
+    // no-contact, failures — a filter away, so writing them separately only duplicated the data.
+    const files = await exportRecords(exportedRecords, options.outputDir, stampedAt, 'maps-emails', {
+      formats: options.formats,
+      meta: { query: options.query, limit: options.limit, contactFilter: options.contactFilter, listingsCollected: records.length, skippedSeen },
+    });
 
     // The run's output is on disk now, so the saved progress has nothing left to protect.
     await deleteCheckpoint(savePath).catch(() => {});
